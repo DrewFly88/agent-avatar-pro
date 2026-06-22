@@ -1,0 +1,393 @@
+"""
+Avatar Service — 头像存储、格式转换、压缩的核心服务。
+
+存储路径: ~/.qwenpaw/plugins/agent-avatar-pro/data/{agent_id}/
+    avatar.{ext}       — 原始头像文件
+    thumbnail.{ext}    — 缩略图 (48x48)
+    meta.json          — 元数据 (格式、来源、上传时间等)
+"""
+
+import asyncio
+import json
+import os
+import time
+from pathlib import Path
+from typing import Optional
+
+# Pillow for image processing
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
+
+# ── Supported formats ────────────────────────────────────────────
+SUPPORTED_FORMATS = {
+    "png": {"mime": "image/png", "animated": False, "magic": b"\x89PNG"},
+    "jpg": {"mime": "image/jpeg", "animated": False, "magic": b"\xff\xd8\xff"},
+    "jpeg": {"mime": "image/jpeg", "animated": False, "magic": b"\xff\xd8\xff"},
+    "gif": {"mime": "image/gif", "animated": True, "magic": b"GIF8"},
+    "webp": {"mime": "image/webp", "animated": True, "magic": b"RIFF"},
+    "svg": {"mime": "image/svg+xml", "animated": False, "magic": b"<svg"},
+    "apng": {"mime": "image/png", "animated": True, "magic": b"\x89PNG"},
+    "json": {"mime": "application/json", "animated": True, "magic": b'{"'},  # Lottie
+}
+
+# Security: URL protocol whitelist
+ALLOWED_URL_PROTOCOLS = ("https://",)
+
+# Default settings
+DEFAULT_MAX_SIZE_MB = 5
+DEFAULT_AVATAR_PX = 256
+THUMBNAIL_PX = 48
+
+# ── Module-level service singleton with readiness gate ───────────
+# plugin.py sets the instance on startup; avatar_backend.py reads it
+# when tools are invoked. The asyncio.Event ensures callers wait for
+# initialization instead of getting None during the startup window.
+
+_service_instance: "AvatarService | None" = None
+_service_ready = asyncio.Event()
+
+# Maximum seconds to wait for service initialization
+_READY_TIMEOUT = 15
+
+
+def set_service(svc: "AvatarService | None") -> None:
+    """设置全局服务实例（由 plugin.py 在 startup hook 中调用）。"""
+    global _service_instance
+    _service_instance = svc
+    if svc is not None:
+        _service_ready.set()
+    else:
+        _service_ready.clear()
+
+
+async def get_service(timeout: float = _READY_TIMEOUT) -> "AvatarService | None":
+    """获取全局服务实例，若尚未初始化则等待（最多 timeout 秒）。
+
+    供 HTTP 端点和 Agent 工具函数使用。
+    返回 None 表示等待超时、服务仍未就绪。
+    """
+    if _service_instance is not None:
+        return _service_instance
+    try:
+        await asyncio.wait_for(_service_ready.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        pass
+    return _service_instance
+
+
+class AvatarService:
+    """头像管理服务。"""
+
+    def __init__(self):
+        self._data_dir: Optional[Path] = None
+        self._config: dict = {}
+
+    async def initialize(self, plugin_dir: Optional[str] = None) -> None:
+        """初始化服务：创建数据目录，加载配置。
+
+        Args:
+            plugin_dir: 插件安装目录的路径，数据将存储在其下的 data/ 子目录。
+                        若未提供，回退到 ~/.qwenpaw/plugins/agent-avatar-pro/data/。
+        """
+        from qwenpaw.plugins import get_tool_config
+
+        self._config = get_tool_config("set_agent_avatar") or {}
+        # 数据存储在插件安装目录下的 data/ 子目录
+        if plugin_dir:
+            self._data_dir = Path(plugin_dir) / "data"
+        else:
+            # 回退：兼容旧版安装
+            self._data_dir = Path.home() / ".qwenpaw" / "plugins" / "agent-avatar-pro" / "data"
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+
+    async def cleanup(self) -> None:
+        """关闭时释放资源。"""
+        pass
+
+    async def purge_all_data(self) -> None:
+        """卸载时删除所有头像数据。"""
+        if self._data_dir and self._data_dir.exists():
+            import shutil
+            shutil.rmtree(self._data_dir, ignore_errors=True)
+
+    # ── Upload ────────────────────────────────────────────────────
+
+    async def upload_avatar(self, agent_id: str, file_data: bytes) -> dict:
+        """上传头像文件。
+
+        流程:
+        1. 校验文件大小
+        2. Magic bytes 格式检测
+        3. SVG 安全清洗
+        4. Pillow resize (静态图片)
+        5. 生成缩略图
+        6. 保存文件 + 元数据
+        """
+        if not self._data_dir:
+            return {"ok": False, "error": "Service not initialized"}
+
+        # 1. Size check
+        max_mb = self._config.get("max_file_size", DEFAULT_MAX_SIZE_MB)
+        max_bytes = int(max_mb) * 1024 * 1024
+        if len(file_data) > max_bytes:
+            return {"ok": False, "error": f"File exceeds {max_mb}MB limit"}
+
+        # 2. Format detection via magic bytes
+        fmt = self._detect_format(file_data)
+        if not fmt:
+            return {"ok": False, "error": "Unsupported file format"}
+
+        # 3. SVG security sanitization
+        if fmt == "svg":
+            file_data = self._sanitize_svg(file_data)
+
+        # 4. Create agent directory
+        agent_dir = self._data_dir / agent_id
+        agent_dir.mkdir(parents=True, exist_ok=True)
+
+        # 5. Save original file
+        ext = fmt if fmt != "jpeg" else "jpg"
+        avatar_path = agent_dir / f"avatar.{ext}"
+        avatar_path.write_bytes(file_data)
+
+        # 6. Resize static images & generate thumbnail
+        if Image and fmt in ("png", "jpg", "jpeg", "webp"):
+            target_px = int(self._config.get("default_size", DEFAULT_AVATAR_PX))
+            self._resize_image(avatar_path, target_px)
+            self._generate_thumbnail(avatar_path, agent_dir / f"thumbnail.{ext}")
+
+        # 7. Save metadata
+        meta = {
+            "format": fmt,
+            "source": "upload",
+            "size_bytes": len(file_data),
+            "uploaded_at": time.time(),
+            "filename": f"avatar.{ext}",
+        }
+        meta_path = agent_dir / "meta.json"
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+
+        return {
+            "ok": True,
+            "agent_id": agent_id,
+            "format": fmt,
+            "size": len(file_data),
+        }
+
+    # ── URL Avatar ────────────────────────────────────────────────
+
+    async def set_avatar_url(self, agent_id: str, url: str) -> dict:
+        """通过 URL 设置头像（不下载，仅保存 URL 引用）。"""
+        if not self._data_dir:
+            return {"ok": False, "error": "Service not initialized"}
+
+        # Security: only allow HTTPS URLs
+        if not url.startswith(ALLOWED_URL_PROTOCOLS):
+            return {"ok": False, "error": "Only HTTPS URLs are allowed"}
+
+        agent_dir = self._data_dir / agent_id
+        agent_dir.mkdir(parents=True, exist_ok=True)
+
+        # Detect format from URL extension
+        fmt = "unknown"
+        for ext_key in SUPPORTED_FORMATS:
+            if url.lower().endswith(f".{ext_key}"):
+                fmt = ext_key
+                break
+
+        meta = {
+            "format": fmt,
+            "source": "url",
+            "url": url,
+            "uploaded_at": time.time(),
+        }
+        meta_path = agent_dir / "meta.json"
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+
+        return {"ok": True, "agent_id": agent_id, "url": url, "format": fmt}
+
+    # ── Get Avatar ────────────────────────────────────────────────
+
+    async def get_avatar(self, agent_id: str, size: str = "full") -> dict:
+        """获取 Agent 头像信息。"""
+        if not self._data_dir:
+            return {"ok": False, "error": "Service not initialized"}
+
+        agent_dir = self._data_dir / agent_id
+        meta_path = agent_dir / "meta.json"
+
+        if not meta_path.exists():
+            return {"ok": False, "error": "No avatar set for this agent"}
+
+        meta = json.loads(meta_path.read_text())
+
+        # URL-based avatar
+        if meta.get("source") == "url":
+            return {"ok": True, "type": "url", "url": meta["url"], "format": meta.get("format", "unknown")}
+
+        # File-based avatar
+        filename = meta.get("filename", "avatar.png")
+        if size == "thumb":
+            thumb_name = filename.replace("avatar.", "thumbnail.")
+            if (agent_dir / thumb_name).exists():
+                filename = thumb_name
+
+        file_path = agent_dir / filename
+        if not file_path.exists():
+            return {"ok": False, "error": "Avatar file not found"}
+
+        import base64
+        data = base64.b64encode(file_path.read_bytes()).decode("ascii")
+        mime = SUPPORTED_FORMATS.get(meta.get("format", ""), {}).get("mime", "image/png")
+
+        return {
+            "ok": True,
+            "type": "file",
+            "format": meta.get("format", "unknown"),
+            "mime": mime,
+            "data": data,
+        }
+
+    # ── Has Avatar ─────────────────────────────────────────────────
+
+    def has_avatar(self, agent_id: str) -> bool:
+        """检查指定 Agent 是否已设置自定义头像。"""
+        if not self._data_dir:
+            return False
+        meta_path = self._data_dir / agent_id / "meta.json"
+        return meta_path.exists()
+
+    # ── Get Avatar Image (raw bytes) ─────────────────────────────
+
+    async def get_avatar_image(self, agent_id: str, size: str = "full") -> "tuple[bytes, str] | None":
+        """
+        获取 Agent 头像的原始图片字节和 MIME 类型。
+        用于 <img> 标签直接加载（返回 FileResponse / Response 而非 JSON）。
+        返回 None 表示该 Agent 没有头像。
+        """
+        if not self._data_dir:
+            return None
+
+        agent_dir = self._data_dir / agent_id
+        meta_path = agent_dir / "meta.json"
+
+        if not meta_path.exists():
+            return None
+
+        meta = json.loads(meta_path.read_text())
+
+        # URL-based avatar: 不下载，返回 None（前端应直接使用 meta["url"]）
+        if meta.get("source") == "url":
+            return None
+
+        filename = meta.get("filename", "avatar.png")
+        if size == "thumb":
+            thumb_name = filename.replace("avatar.", "thumbnail.")
+            if (agent_dir / thumb_name).exists():
+                filename = thumb_name
+
+        file_path = agent_dir / filename
+        if not file_path.exists():
+            return None
+
+        data = file_path.read_bytes()
+        mime = SUPPORTED_FORMATS.get(meta.get("format", ""), {}).get("mime", "image/png")
+        return data, mime
+
+    # ── Delete Avatar ─────────────────────────────────────────────
+
+    async def delete_avatar(self, agent_id: str) -> dict:
+        """删除 Agent 的自定义头像。"""
+        if not self._data_dir:
+            return {"ok": False, "error": "Service not initialized"}
+
+        agent_dir = self._data_dir / agent_id
+        if agent_dir.exists():
+            import shutil
+            shutil.rmtree(agent_dir, ignore_errors=True)
+
+        return {"ok": True, "agent_id": agent_id}
+
+    # ── List Avatars ──────────────────────────────────────────────
+
+    async def list_avatars(self) -> dict:
+        """列出所有已配置头像的 Agent。"""
+        if not self._data_dir:
+            return {"ok": False, "error": "Service not initialized"}
+
+        results = []
+        for agent_dir in self._data_dir.iterdir():
+            if not agent_dir.is_dir():
+                continue
+            meta_path = agent_dir / "meta.json"
+            if meta_path.exists():
+                meta = json.loads(meta_path.read_text())
+                results.append({
+                    "agent_id": agent_dir.name,
+                    "format": meta.get("format", "unknown"),
+                    "source": meta.get("source", "unknown"),
+                    "uploaded_at": meta.get("uploaded_at", 0),
+                })
+
+        return {"ok": True, "count": len(results), "avatars": results}
+
+    # ── Internal Helpers ──────────────────────────────────────────
+
+    def _detect_format(self, data: bytes) -> Optional[str]:
+        """通过 Magic bytes 检测图片格式。"""
+        for fmt, info in SUPPORTED_FORMATS.items():
+            magic = info.get("magic", b"")
+            if data[:len(magic)] == magic:
+                # Distinguish APNG from regular PNG
+                if fmt == "png" and self._is_apng(data):
+                    return "apng"
+                return fmt
+
+        # SVG 可能以 <?xml 声明开头，需在内容中查找 <svg 标签
+        if data[:5] == b"<?xml" and b"<svg" in data[:1024]:
+            return "svg"
+
+        return None
+
+    @staticmethod
+    def _is_apng(data: bytes) -> bool:
+        """检测 PNG 是否为 APNG（包含 acTL chunk）。"""
+        return b"acTL" in data[:1024]
+
+    @staticmethod
+    def _sanitize_svg(data: bytes) -> bytes:
+        """清洗 SVG 中的潜在 XSS 内容。"""
+        text = data.decode("utf-8", errors="replace")
+        # Remove dangerous tags and attributes
+        import re
+        text = re.sub(r"<script[\s\S]*?</script>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bon\w+\s*=\s*['\"][^'\"]*['\"]", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"javascript\s*:", "", text, flags=re.IGNORECASE)
+        return text.encode("utf-8")
+
+    @staticmethod
+    def _resize_image(path: Path, target_px: int) -> None:
+        """使用 Pillow 调整图片尺寸（保持宽高比）。"""
+        if not Image:
+            return
+        try:
+            img = Image.open(path)
+            img.thumbnail((target_px, target_px), Image.LANCZOS)
+            img.save(path)
+        except Exception:
+            pass  # Non-critical: keep original if resize fails
+
+    @staticmethod
+    def _generate_thumbnail(src: Path, dst: Path) -> None:
+        """生成缩略图。"""
+        if not Image:
+            return
+        try:
+            img = Image.open(src)
+            img.thumbnail((THUMBNAIL_PX, THUMBNAIL_PX), Image.LANCZOS)
+            img.save(dst)
+        except Exception:
+            pass

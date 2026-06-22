@@ -1,0 +1,71 @@
+{
+  "id": "agent-avatar-pro",
+  "name": {
+    "zh-CN": "Agent 头像增强",
+    "en-US": "Agent Avatar Pro"
+  },
+  "version": "0.1.0",
+  "description": {
+    "zh-CN": "为 QwenPaw Agent 自定义头像，支持 APNG/SVG/Lottie 等动态格式、URL 头像、聊天窗口展示",
+    "en-US": "Custom agent avatars with APNG/SVG/Lottie support, URL avatars, and chat window display"
+  },
+  "author": "Developer",
+  "type": "frontend",
+  "entry": {
+    "backend": "plugin.py",
+    "frontend": "dist/index.js"
+  },
+  "dependencies": [
+    "Pillow>=9.0",
+    "httpx"
+  ],
+  "min_version": "1.1.0",
+  "meta": {
+    "tools": [
+      {
+        "name": "set_agent_avatar",
+        "description": "为指定 Agent 设置自定义头像（支持上传文件或 URL）"
+      },
+      {
+        "name": "get_agent_avatar_status",
+        "description": "查看所有 Agent 的头像配置状态"
+      }
+    ],
+    "config_fields": [
+      {
+        "name": "max_file_size",
+        "label": "最大文件大小 (MB)",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "default_size",
+        "label": "默认头像尺寸 (px)",
+        "type": "select",
+        "options": ["128", "256", "512"],
+        "required": false
+      },
+      {
+        "name": "enable_lottie",
+        "label": "启用 Lottie 动画",
+        "type": "select",
+        "options": ["true", "false"],
+        "required": false
+      },
+      {
+        "name": "enable_chat_avatar",
+        "label": "聊天窗口展示头像",
+        "type": "select",
+        "options": ["true", "false"],
+        "required": false
+      },
+      {
+        "name": "compression_quality",
+        "label": "压缩质量",
+        "type": "select",
+        "options": ["high (90%)", "medium (70%)", "low (50%)"],
+        "required": false
+      }
+    ]
+  }
+}

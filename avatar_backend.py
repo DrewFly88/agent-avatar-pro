@@ -42,6 +42,12 @@ async def set_agent_avatar(agent_id: str, source: str) -> "ToolResponse":
             return ToolResponse(content=f"上传失败：{e}")
 
     if result.get("ok"):
+        if result.get("replaced"):
+            prev_fmt = result.get("previous_format", "unknown")
+            return ToolResponse(
+                content=f"已替换 Agent [{agent_id}] 的头像（原格式: {prev_fmt}），"
+                        f"新格式: {result.get('format', 'unknown')}。旧头像已备份。"
+            )
         return ToolResponse(
             content=f"已为 Agent [{agent_id}] 设置头像，格式: {result.get('format', 'unknown')}"
         )

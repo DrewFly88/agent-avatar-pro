@@ -148,6 +148,23 @@ class AvatarService:
         agent_dir = self._data_dir / agent_id
         agent_dir.mkdir(parents=True, exist_ok=True)
 
+        # 4.5 检查是否已有头像，若有则备份并记录历史
+        replaced = False
+        previous_format = None
+        history: list = []
+
+        meta_path = agent_dir / "meta.json"
+        if meta_path.exists():
+            old_meta = json.loads(meta_path.read_text())
+            replaced = True
+            previous_format = old_meta.get("format")
+            history = old_meta.get("history", [])
+            history.append(self._build_history_entry(old_meta))
+            # 仅保留最近 1 条历史
+            if len(history) > 1:
+                history = history[-1:]
+            self._backup_existing(agent_dir)
+
         # 5. Save original file
         ext = fmt if fmt != "jpeg" else "jpg"
         avatar_path = agent_dir / f"avatar.{ext}"
@@ -155,17 +172,22 @@ class AvatarService:
 
         # 6. Resize static images & generate thumbnail
         if Image and fmt in ("png", "jpg", "jpeg", "webp"):
-            target_px = int(self._config.get("default_size", DEFAULT_AVATAR_PX))
-            self._resize_image(avatar_path, target_px)
-            self._generate_thumbnail(avatar_path, agent_dir / f"thumbnail.{ext}")
+            # 动画 WebP 不能走 Pillow resize，会破坏动画帧
+            if fmt == "webp" and self._is_animated_webp(file_data):
+                pass  # skip resize for animated WebP
+            else:
+                target_px = int(self._config.get("default_size", DEFAULT_AVATAR_PX))
+                self._resize_image(avatar_path, target_px)
+                self._generate_thumbnail(avatar_path, agent_dir / f"thumbnail.{ext}")
 
-        # 7. Save metadata
+        # 7. Save metadata (含历史记录)
         meta = {
             "format": fmt,
             "source": "upload",
             "size_bytes": len(file_data),
             "uploaded_at": time.time(),
             "filename": f"avatar.{ext}",
+            "history": history,
         }
         meta_path = agent_dir / "meta.json"
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
@@ -175,12 +197,18 @@ class AvatarService:
             "agent_id": agent_id,
             "format": fmt,
             "size": len(file_data),
+            "replaced": replaced,
+            "previous_format": previous_format,
         }
 
     # ── URL Avatar ────────────────────────────────────────────────
 
     async def set_avatar_url(self, agent_id: str, url: str) -> dict:
-        """通过 URL 设置头像（不下载，仅保存 URL 引用）。"""
+        """通过 URL 设置头像（不下载，仅保存 URL 引用）。
+
+        若已有文件类型头像，会清理旧的 avatar/thumbnail 文件（解决孤立文件问题）。
+        若已有任意类型头像，会备份旧数据并记录历史。
+        """
         if not self._data_dir:
             return {"ok": False, "error": "Service not initialized"}
 
@@ -190,6 +218,30 @@ class AvatarService:
 
         agent_dir = self._data_dir / agent_id
         agent_dir.mkdir(parents=True, exist_ok=True)
+
+        # 检查现有头像，备份并记录历史
+        replaced = False
+        previous_format = None
+        previous_source = None
+        history: list = []
+
+        meta_path = agent_dir / "meta.json"
+        if meta_path.exists():
+            old_meta = json.loads(meta_path.read_text())
+            replaced = True
+            previous_format = old_meta.get("format")
+            previous_source = old_meta.get("source")
+            history = old_meta.get("history", [])
+            history.append(self._build_history_entry(old_meta))
+            if len(history) > 1:
+                history = history[-1:]
+
+            # file→URL 切换：清理旧的头像文件（解决孤立文件问题）
+            if previous_source == "file":
+                self._cleanup_old_files(agent_dir)
+            else:
+                # URL→URL 替换：备份旧 meta
+                self._backup_existing(agent_dir)
 
         # Detect format from URL extension
         fmt = "unknown"
@@ -203,11 +255,19 @@ class AvatarService:
             "source": "url",
             "url": url,
             "uploaded_at": time.time(),
+            "history": history,
         }
         meta_path = agent_dir / "meta.json"
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
-        return {"ok": True, "agent_id": agent_id, "url": url, "format": fmt}
+        return {
+            "ok": True,
+            "agent_id": agent_id,
+            "url": url,
+            "format": fmt,
+            "replaced": replaced,
+            "previous_format": previous_format,
+        }
 
     # ── Get Avatar ────────────────────────────────────────────────
 
@@ -336,6 +396,46 @@ class AvatarService:
 
     # ── Internal Helpers ──────────────────────────────────────────
 
+    def _backup_existing(self, agent_dir: Path) -> bool:
+        """备份现有头像文件到 backup/ 子目录。返回是否有备份。
+
+        将 agent 目录下所有文件（含 meta.json）移动到 backup/，
+        覆盖上一次的备份。仅保留最近一次备份。
+        """
+        backup_dir = agent_dir / "backup"
+        has_backup = False
+
+        # 先移动普通文件
+        for f in agent_dir.iterdir():
+            if f.is_file():
+                if not backup_dir.exists():
+                    backup_dir.mkdir(parents=True, exist_ok=True)
+                dst = backup_dir / f.name
+                if dst.exists():
+                    dst.unlink()
+                f.rename(dst)
+                has_backup = True
+
+        return has_backup
+
+    def _cleanup_old_files(self, agent_dir: Path) -> None:
+        """清理 agent 目录中的旧头像文件（不含 meta.json 和 backup/ 子目录）。
+
+        用于 file→URL 切换时，删除残留的 avatar.{ext} / thumbnail.{ext}。
+        """
+        for f in agent_dir.iterdir():
+            if f.is_file() and f.name != "meta.json":
+                f.unlink()
+
+    @staticmethod
+    def _build_history_entry(old_meta: dict) -> dict:
+        """从旧 meta 构建历史记录条目。"""
+        return {
+            "format": old_meta.get("format", "unknown"),
+            "source": old_meta.get("source", "unknown"),
+            "replaced_at": time.time(),
+        }
+
     def _detect_format(self, data: bytes) -> Optional[str]:
         """通过 Magic bytes 检测图片格式。"""
         for fmt, info in SUPPORTED_FORMATS.items():
@@ -344,6 +444,10 @@ class AvatarService:
                 # Distinguish APNG from regular PNG
                 if fmt == "png" and self._is_apng(data):
                     return "apng"
+                # Distinguish animated WebP from static WebP
+                if fmt == "webp" and not self._is_animated_webp(data):
+                    # 静态 WebP — 当作普通静态图片处理，允许裁剪/缩放
+                    return fmt  # 仍然返回 "webp"，但 animated 仅可由 SUPPORTED_FORMATS 查询
                 return fmt
 
         # SVG 可能以 <?xml 声明开头，需在内容中查找 <svg 标签
@@ -356,6 +460,24 @@ class AvatarService:
     def _is_apng(data: bytes) -> bool:
         """检测 PNG 是否为 APNG（包含 acTL chunk）。"""
         return b"acTL" in data[:1024]
+
+    @staticmethod
+    def _is_animated_webp(data: bytes) -> bool:
+        """检测 WebP 文件是否为动画格式。
+
+        WebP 容器结构：RIFF [size] WEBP [chunks...]
+        VP8X 扩展块（offset 12）包含动画标志：
+          - byte 0: 'V' (0x56), byte 1: 'P' (0x50)
+          - byte 2: '8' (0x38), byte 3: 'X' (0x58)
+          - byte 8 (offset 20): flags，bit 1 (0x02) = animation
+        """
+        if len(data) < 30:
+            return False
+        # 检查 VP8X chunk 签名（位于 offset 12）
+        if data[12:16] != b"VP8X":
+            return False
+        # flags 字节位于 VP8X chunk 起始 + 8 = offset 20
+        return (data[20] & 0x02) != 0
 
     @staticmethod
     def _sanitize_svg(data: bytes) -> bytes:

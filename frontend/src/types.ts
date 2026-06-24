@@ -42,6 +42,8 @@ export interface AvatarUploadResponse extends ApiResponse {
   agent_id: string;
   format: string;
   size: number;
+  replaced?: boolean;
+  previous_format?: string;
 }
 
 export interface FormatInfo {

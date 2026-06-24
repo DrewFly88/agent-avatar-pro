@@ -16,7 +16,7 @@ import { startAvatarMonitor } from './ChatAvatar';
 export { default as AvatarRenderer } from './AvatarRenderer';
 export { default as AvatarUploader } from './AvatarUploader';
 export { default as AvatarManager } from './AvatarManager';
-export { startAvatarMonitor, stopAvatarMonitor } from './ChatAvatar';
+export { startAvatarMonitor, stopAvatarMonitor, refreshCurrentAvatar } from './ChatAvatar';
 
 // ── 类型导出 ────────────────────────────────────────────────────
 export type {

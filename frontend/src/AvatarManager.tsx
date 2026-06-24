@@ -18,6 +18,7 @@ const { Title, Text } = (Typography ?? {}) as any;
 
 import type { AvatarMeta, FormatInfo, AvatarManagerProps, AgentInfo } from './types';
 import { fetchAvatarList, fetchSupportedFormats, fetchAgents, deleteAvatar } from './api';
+import { refreshCurrentAvatar } from './ChatAvatar';
 import AvatarRenderer from './AvatarRenderer';
 import AvatarUploader from './AvatarUploader';
 
@@ -107,6 +108,8 @@ export default function AvatarManager(_props?: AvatarManagerProps) {
       await deleteAvatar(agentId);
       message.success(`已删除 ${agentId} 的头像`);
       setRefreshKey((k) => k + 1);
+      // 刷新聊天页面头像，删除后立即反映变更
+      refreshCurrentAvatar(agentId);
     } catch (e: any) {
       message.error(e?.message || String(e));
     }
@@ -228,6 +231,7 @@ export default function AvatarManager(_props?: AvatarManagerProps) {
           // 上传组件仅在 Agent ID 合法时显示
           selectedAgent && agentValid
             ? React.createElement(AvatarUploader, {
+                key: selectedAgent,
                 agentId: selectedAgent,
                 onUploaded: handleUploaded,
               })
@@ -253,7 +257,7 @@ export default function AvatarManager(_props?: AvatarManagerProps) {
 
       // 头像列表
       React.createElement(Table, {
-        rowKey: 'agent_id',
+        rowKey: (row: AvatarMeta) => `${row.agent_id}-${refreshKey}`,
         loading,
         dataSource: avatars,
         columns,

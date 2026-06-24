@@ -182,7 +182,7 @@ export async function fetchSupportedFormats(): Promise<FormatsResponse> {
 export function getAvatarImageUrl(agentId: string, bust = true): string {
   const host = window.QwenPaw?.host;
   const base = host?.getApiUrl
-    ? host.getApiUrl(`/avatar-pro/${agentId}`)
-    : `/api/avatar-pro/${agentId}`;
+    ? host.getApiUrl(`/avatar-pro/${agentId}/image`)
+    : `/api/avatar-pro/${agentId}/image`;
   return bust ? `${base}?t=${Date.now()}` : base;
 }

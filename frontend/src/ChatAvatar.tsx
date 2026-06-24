@@ -1,12 +1,17 @@
 /**
- * ChatAvatar — 聊天头像定制（官方 API 版本 v3）
+ * ChatAvatar — 聊天头像定制（官方 API 版本 v4）
  *
  * 使用 QwenPaw 官方 chat.response.set() 和 chat.welcome.set() API
  * 为聊天气泡和欢迎界面设置当前 Agent 的自定义头像。
  *
- * v3 修复：
+ * v4 变更：
+ * - nick 始终设置（无论是否有自定义头像），所有 Agent 名称立即生效
+ * - refreshCurrentAvatar() 支持指定 agentId 参数，修复管理页上传后刷新错误 Agent 的问题
+ * - avatar 图片 URL 添加 cache-busting 参数，防止浏览器缓存旧图
+ *
+ * v3（基础）：
  * - avatar 使用图片直传端点 URL（GET /{agent_id}/image），而非 JSON API
- * - 先通过 /check 端点确认 Agent 有自定义头像，无头像时不设（保持默认）
+ * - 先通过 /check 端点确认 Agent 有自定义头像
  * - nick 使用 Agent 名称而非 ID（从 /agents 端点获取）
  *
  * 关键发现（来自官方文档 plugins.zh.md）：
@@ -59,10 +64,11 @@ async function getAgentName(agentId: string): Promise<string> {
 
 function getImageUrl(agentId: string): string {
   const host = window.QwenPaw?.host;
+  const ts = Date.now();
   if (host?.getApiUrl) {
-    return host.getApiUrl(`/avatar-pro/${agentId}/image`);
+    return `${host.getApiUrl(`/avatar-pro/${agentId}/image`)}?t=${ts}`;
   }
-  return `/api/avatar-pro/${agentId}/image`;
+  return `/api/avatar-pro/${agentId}/image?t=${ts}`;
 }
 
 // ── 清理所有注册 ────────────────────────────────────────────────
@@ -96,30 +102,32 @@ async function updateChatAvatar(agentId: string): Promise<void> {
     return;
   }
 
-  if (!check.ok || !check.has_avatar) {
-    console.log(`[agent-avatar-pro] Agent "${agentId}" has no custom avatar, keeping default`);
-    return;
+  // 确定头像 URL（仅在有自定义头像时设置）
+  let avatarUrl: string | undefined;
+  if (check.ok && check.has_avatar) {
+    if (check.type === "url" && check.url) {
+      avatarUrl = check.url;
+    } else {
+      avatarUrl = getImageUrl(agentId);
+    }
   }
 
-  // 确定头像 URL
-  let avatarUrl: string;
-  if (check.type === "url" && check.url) {
-    // URL 类型头像：直接使用原始 URL
-    avatarUrl = check.url;
-  } else {
-    // 文件类型头像：使用图片直传端点
-    avatarUrl = getImageUrl(agentId);
-  }
+  console.log(
+    `[agent-avatar-pro] Setting nick for "${agentId}" → "${agentName}", avatar: ${avatarUrl || "(none, keep default)"}`
+  );
 
-  console.log(`[agent-avatar-pro] Setting avatar for "${agentId}" (${agentName}): ${avatarUrl}`);
+  // 构建设置参数：nick 始终设置，avatar 仅在有自定义头像时设置
+  const welcomeParams: Record<string, string> = { nick: agentName };
+  const responseParams: Record<string, string> = { nick: agentName };
+  if (avatarUrl) {
+    welcomeParams.avatar = avatarUrl;
+    responseParams.avatar = avatarUrl;
+  }
 
   // 设置欢迎界面的头像和昵称（chat.response.set 内部复用 welcome 字段）
   try {
     if (qwpaw.chat.welcome?.set) {
-      const d = qwpaw.chat.welcome.set(PLUGIN_ID, {
-        avatar: avatarUrl,
-        nick: agentName,
-      });
+      const d = qwpaw.chat.welcome.set(PLUGIN_ID, welcomeParams);
       disposables.push(d);
     }
   } catch (e) {
@@ -129,10 +137,7 @@ async function updateChatAvatar(agentId: string): Promise<void> {
   // 设置 AI 回复气泡的头像和昵称
   try {
     if (qwpaw.chat.response?.set) {
-      const d = qwpaw.chat.response.set(PLUGIN_ID, {
-        avatar: avatarUrl,
-        nick: agentName,
-      });
+      const d = qwpaw.chat.response.set(PLUGIN_ID, responseParams);
       disposables.push(d);
     }
   } catch (e) {
@@ -175,6 +180,26 @@ export function startAvatarMonitor(): void {
   setTimeout(checkAgentChange, 500);
 
   pollTimer = setInterval(checkAgentChange, POLL_INTERVAL_MS);
+}
+
+/**
+ * 强制刷新当前 Agent 的聊天头像（上传新头像后立即调用）。
+ * 可指定 agentId 以刷新特定 Agent（管理页上传时使用），
+ * 未指定时回退到聊天窗口当前选中的 Agent。
+ *
+ * 仅当目标 agentId 与聊天窗口当前 Agent 一致时才执行刷新，
+ * 避免清除其他 Agent 的 Disposable 导致当前聊天头像被重置。
+ */
+export function refreshCurrentAvatar(agentId?: string): void {
+  const targetId = agentId || lastAgentId;
+  if (!targetId) return;
+  // 仅刷新当前聊天窗口的 Agent，非当前 Agent 的头像变更由轮询机制在切换时更新
+  if (agentId && lastAgentId && agentId !== lastAgentId) {
+    console.log(`[agent-avatar-pro] Skip refresh: "${agentId}" is not the current chat agent "${lastAgentId}"`);
+    return;
+  }
+  console.log(`[agent-avatar-pro] Force refresh for agent "${targetId}"`);
+  updateChatAvatar(targetId);
 }
 
 /**

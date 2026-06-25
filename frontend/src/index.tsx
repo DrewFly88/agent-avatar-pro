@@ -76,11 +76,14 @@ class AgentAvatarProPlugin {
       console.error("[agent-avatar-pro] Failed to register menu:", e);
     }
 
-    // 启动聊天头像监控：轮询检测当前 Agent，动态设置聊天头像
+    // 启动聊天头像注入（v5.5 条件触发 + storage 事件驱动）：
+    // route.wrap("core.chat") 检测进入聊天页时加载头像（disposable 独立存储），
+    // monkey-patch + storage 事件检测 Agent 切换，
+    // 阶梯式重试 3s/6s/9s（应对后端启动延迟）。
     try {
       startAvatarMonitor();
     } catch (e) {
-      console.warn("[agent-avatar-pro] Chat avatar monitor failed to start:", e);
+      console.warn("[agent-avatar-pro] Chat avatar injector failed to start:", e);
     }
   }
 

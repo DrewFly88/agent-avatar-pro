@@ -16,7 +16,7 @@ QwenPaw Agent 自定义头像插件 — 为每个 Agent 设置专属头像，支
 | 格式 | 扩展名 | 类型 | 说明 |
 |------|--------|------|------|
 | PNG | `.png` | 静态/动画 | 支持 APNG 动画 |
-| JPEG | `.jpg` `.jpeg` | 静态 | 照片类头像 |
+| JPEG | `.jpg`, `.jpeg` | 静态 | 照片类头像 |
 | GIF | `.gif` | 动画 | 传统动画格式 |
 | WebP | `.webp` | 静态/动画 | 现代高效格式 |
 | SVG | `.svg` | 矢量 | 任意放大不模糊 |
@@ -106,7 +106,7 @@ agent-avatar-pro/
 ├── requirements.txt        # Python 依赖（QwenPaw 自带）
 ├── build.bat / install.bat # Windows 构建/安装脚本
 ├── dist/
-│   └── index.js            # 前端构建产物（~24KB）
+│   └── index.js            # 前端构建产物（~45KB）
 ├── frontend/
 │   └── src/
 │       ├── index.tsx        # 前端入口
@@ -115,12 +115,14 @@ agent-avatar-pro/
 │       ├── AvatarUploader.tsx   # 上传组件
 │       ├── AvatarRenderer.tsx   # 多格式渲染器
 │       ├── ChatAvatar.tsx       # 聊天窗口头像
+│       ├── CropModal.tsx        # 圆形裁剪弹窗
 │       ├── qwenpaw-host.d.ts    # Host SDK 类型声明
 │       └── types.ts             # TypeScript 类型
 └── docs/
     ├── DEVLOG.md            # 开发日志
     ├── GUIDE.md             # 详细使用说明
-    └── TESTING.md           # 测试说明
+    ├── TESTING.md           # 测试说明
+    └── QWENPAW_UNDERSTANDING.md # QwenPaw 平台理解与开发经验
 ```
 
 ## 开发
@@ -167,4 +169,4 @@ build.bat
 
 - [详细使用说明](docs/GUIDE.md) — 安装配置、API 参考、常见问题
 - [测试说明](docs/TESTING.md) — API 测试、安全测试、格式兼容性测试的完整步骤
-- [开发日志](docs/DEVLOG.md) — 开发进度、22 个问题记录、11 项设计决策
+- [开发日志](docs/DEVLOG.md) — 开发进度、39 个问题记录、22 项设计决策

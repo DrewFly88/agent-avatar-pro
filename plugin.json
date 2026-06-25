@@ -1,11 +1,9 @@
 {
   "id": "agent-avatar-pro",
-  "name": {
-    "zh-CN": "Agent 头像增强",
-    "en-US": "Agent Avatar Pro"
-  },
-  "version": "0.1.0",
-  "description": {
+  "name": "Agent Avatar Pro",
+  "version": "0.1.2",
+  "description": "Custom agent avatars with APNG/SVG/Lottie support, URL avatars, and chat window display",
+  "description_i18n": {
     "zh-CN": "为 QwenPaw Agent 自定义头像，支持 APNG/SVG/Lottie 等动态格式、URL 头像、聊天窗口展示",
     "en-US": "Custom agent avatars with APNG/SVG/Lottie support, URL avatars, and chat window display"
   },

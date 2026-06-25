@@ -1,4 +1,4 @@
-var _a, _b, _c, _d;
+var _a, _b, _c, _d, _e;
 function hostFetch(path, init) {
   var _a2, _b2;
   const host2 = (_a2 = window.QwenPaw) == null ? void 0 : _a2.host;
@@ -101,10 +101,9 @@ function getAvatarImageUrl(agentId, bust = true) {
   return bust ? `${base}?t=${Date.now()}` : base;
 }
 const PLUGIN_ID$1 = "agent-avatar-pro";
-const POLL_INTERVAL_MS = 800;
-let lastAgentId = null;
-let pollTimer = null;
-const disposables = [];
+const AGENT_STORAGE_KEY = "qwenpaw-agent-storage";
+const host$4 = ((_a = window.QwenPaw) == null ? void 0 : _a.host) ?? {};
+const React$4 = host$4.React ?? { createElement: () => null, useRef: () => ({ current: null }) };
 let agentNameCache = /* @__PURE__ */ new Map();
 let agentCacheLoaded = false;
 let agentCacheTime = 0;
@@ -129,18 +128,21 @@ async function getAgentName(agentId) {
   return agentId;
 }
 function getImageUrl(agentId) {
-  var _a2;
-  const host2 = (_a2 = window.QwenPaw) == null ? void 0 : _a2.host;
   const ts = Date.now();
-  if (host2 == null ? void 0 : host2.getApiUrl) {
-    return `${host2.getApiUrl(`/avatar-pro/${agentId}/image`)}?t=${ts}`;
+  if (host$4 == null ? void 0 : host$4.getApiUrl) {
+    return `${host$4.getApiUrl(`/avatar-pro/${agentId}/image`)}?t=${ts}`;
   }
   return `/api/avatar-pro/${agentId}/image?t=${ts}`;
 }
+const disposables = [];
+let _routeWrapDisposable = null;
 function clearDisposables() {
   disposables.forEach((d) => d.dispose());
   disposables.length = 0;
 }
+let lastAgentId = null;
+let avatarLoaded = false;
+let _avatarConfirmed = false;
 async function updateChatAvatar(agentId) {
   var _a2, _b2;
   const qwpaw = window.QwenPaw;
@@ -148,15 +150,14 @@ async function updateChatAvatar(agentId) {
     console.warn("[agent-avatar-pro] chat API not available");
     return;
   }
+  lastAgentId = agentId;
+  avatarLoaded = false;
+  _avatarConfirmed = false;
   clearDisposables();
   const [check, agentName] = await Promise.all([
     checkAvatar(agentId),
     getAgentName(agentId)
   ]);
-  if (agentId !== lastAgentId) {
-    console.log(`[agent-avatar-pro] Agent changed during fetch, skipping "${agentId}"`);
-    return;
-  }
   let avatarUrl;
   if (check.ok && check.has_avatar) {
     if (check.type === "url" && check.url) {
@@ -165,18 +166,20 @@ async function updateChatAvatar(agentId) {
       avatarUrl = getImageUrl(agentId);
     }
   }
+  if (check.ok) {
+    _avatarConfirmed = true;
+  }
   console.log(
-    `[agent-avatar-pro] Setting nick for "${agentId}" → "${agentName}", avatar: ${avatarUrl || "(none, keep default)"}`
+    `[agent-avatar-pro] Setting nick for "${agentId}" → "${agentName}", avatar: ${avatarUrl || "(none)"}, check.ok: ${check.ok}`
   );
-  const welcomeParams = { nick: agentName };
-  const responseParams = { nick: agentName };
+  const params = { nick: agentName };
   if (avatarUrl) {
-    welcomeParams.avatar = avatarUrl;
-    responseParams.avatar = avatarUrl;
+    params.avatar = avatarUrl;
+    avatarLoaded = true;
   }
   try {
     if ((_a2 = qwpaw.chat.welcome) == null ? void 0 : _a2.set) {
-      const d = qwpaw.chat.welcome.set(PLUGIN_ID$1, welcomeParams);
+      const d = qwpaw.chat.welcome.set(PLUGIN_ID$1, params);
       disposables.push(d);
     }
   } catch (e) {
@@ -184,55 +187,142 @@ async function updateChatAvatar(agentId) {
   }
   try {
     if ((_b2 = qwpaw.chat.response) == null ? void 0 : _b2.set) {
-      const d = qwpaw.chat.response.set(PLUGIN_ID$1, responseParams);
+      const d = qwpaw.chat.response.set(PLUGIN_ID$1, params);
       disposables.push(d);
     }
   } catch (e) {
     console.warn("[agent-avatar-pro] chat.response.set failed:", e);
   }
 }
-function checkAgentChange() {
-  var _a2, _b2;
-  const host2 = (_a2 = window.QwenPaw) == null ? void 0 : _a2.host;
-  if (!host2) return;
+function extractAgentId(storageValue) {
+  var _a2;
+  if (!storageValue) return null;
   try {
-    const currentAgentId = (_b2 = host2.getSelectedAgentId) == null ? void 0 : _b2.call(host2);
-    if (currentAgentId && currentAgentId !== lastAgentId) {
-      console.log(`[agent-avatar-pro] Agent changed: ${lastAgentId} → ${currentAgentId}`);
-      lastAgentId = currentAgentId;
-      updateChatAvatar(currentAgentId);
-    }
+    const parsed = JSON.parse(storageValue);
+    const id = (_a2 = parsed == null ? void 0 : parsed.state) == null ? void 0 : _a2.selectedAgent;
+    return typeof id === "string" && id ? id : null;
   } catch {
+    return null;
   }
+}
+function onStorageEvent(e) {
+  if (e.key !== AGENT_STORAGE_KEY) return;
+  const agentId = extractAgentId(e.newValue);
+  if (!agentId || agentId === lastAgentId) return;
+  console.log(`[agent-avatar-pro] Agent changed (cross-tab): ${lastAgentId} → ${agentId}`);
+  updateChatAvatar(agentId);
+}
+let patchedSetItem = false;
+let originalSetItem = null;
+function patchSessionStorage() {
+  if (patchedSetItem) return;
+  try {
+    originalSetItem = sessionStorage.setItem.bind(sessionStorage);
+    sessionStorage.setItem = function(key, value) {
+      originalSetItem(key, value);
+      if (key === AGENT_STORAGE_KEY) {
+        const agentId = extractAgentId(value);
+        if (agentId && agentId !== lastAgentId) {
+          console.log(`[agent-avatar-pro] Agent changed (same-tab): ${lastAgentId} → ${agentId}`);
+          updateChatAvatar(agentId);
+        }
+      }
+    };
+    patchedSetItem = true;
+    console.log("[agent-avatar-pro] sessionStorage.setItem patched for agent detection");
+  } catch (e) {
+    console.warn("[agent-avatar-pro] Failed to patch sessionStorage:", e);
+  }
+}
+function unpatchSessionStorage() {
+  if (patchedSetItem && originalSetItem) {
+    sessionStorage.setItem = originalSetItem;
+    patchedSetItem = false;
+    originalSetItem = null;
+  }
+}
+let _chatInnerRef = { current: null };
+let _chatAvatarTriggered = false;
+function ChatRouteWrapper() {
+  if (!_chatAvatarTriggered) {
+    _chatAvatarTriggered = true;
+    setTimeout(() => {
+      var _a2;
+      const agentId = (_a2 = host$4.getSelectedAgentId) == null ? void 0 : _a2.call(host$4);
+      if (agentId) {
+        lastAgentId = null;
+        console.log(`[agent-avatar-pro] Chat page entered, loading avatar for "${agentId}"`);
+        updateChatAvatar(agentId);
+      }
+    }, 0);
+  }
+  return React$4.createElement(_chatInnerRef.current);
 }
 function startAvatarMonitor() {
-  if (pollTimer) return;
-  console.log("[agent-avatar-pro] Starting avatar monitor");
-  getAgentName("").catch(() => {
+  var _a2, _b2;
+  patchSessionStorage();
+  window.addEventListener("storage", onStorageEvent);
+  const qwpaw = window.QwenPaw;
+  if ((_a2 = qwpaw == null ? void 0 : qwpaw.route) == null ? void 0 : _a2.wrap) {
+    try {
+      _routeWrapDisposable = qwpaw.route.wrap(PLUGIN_ID$1, "core.chat", (Inner) => {
+        _chatInnerRef.current = Inner;
+        return ChatRouteWrapper;
+      });
+      console.log('[agent-avatar-pro] route.wrap("core.chat") registered');
+    } catch (e) {
+      console.warn("[agent-avatar-pro] route.wrap failed:", e);
+    }
+  } else {
+    console.warn("[agent-avatar-pro] route.wrap not available, falling back to 5s delay");
+    const currentId = (_b2 = host$4.getSelectedAgentId) == null ? void 0 : _b2.call(host$4);
+    if (currentId) {
+      lastAgentId = currentId;
+      setTimeout(() => {
+        var _a3;
+        const freshId = (_a3 = host$4.getSelectedAgentId) == null ? void 0 : _a3.call(host$4);
+        if (freshId) {
+          lastAgentId = null;
+          updateChatAvatar(freshId);
+        }
+      }, 5e3);
+    }
+  }
+  const retryDelays = [3e3, 6e3, 9e3];
+  retryDelays.forEach((delay) => {
+    setTimeout(() => {
+      var _a3;
+      if (!avatarLoaded && !_avatarConfirmed) {
+        const retryId = (_a3 = host$4.getSelectedAgentId) == null ? void 0 : _a3.call(host$4);
+        if (retryId) {
+          console.log(`[agent-avatar-pro] Retrying avatar load (${delay / 1e3}s, avatarLoaded=false, agent: "${retryId}")`);
+          lastAgentId = null;
+          updateChatAvatar(retryId);
+        }
+      }
+    }, delay);
   });
-  setTimeout(checkAgentChange, 500);
-  pollTimer = setInterval(checkAgentChange, POLL_INTERVAL_MS);
+  console.log("[agent-avatar-pro] Condition-triggered avatar monitor started");
 }
 function refreshCurrentAvatar(agentId) {
-  const targetId = agentId || lastAgentId;
+  var _a2;
+  const targetId = agentId ?? ((_a2 = host$4.getSelectedAgentId) == null ? void 0 : _a2.call(host$4));
   if (!targetId) return;
-  if (agentId && lastAgentId && agentId !== lastAgentId) {
-    console.log(`[agent-avatar-pro] Skip refresh: "${agentId}" is not the current chat agent "${lastAgentId}"`);
-    return;
-  }
   console.log(`[agent-avatar-pro] Force refresh for agent "${targetId}"`);
+  lastAgentId = null;
   updateChatAvatar(targetId);
 }
 function stopAvatarMonitor() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
+  window.removeEventListener("storage", onStorageEvent);
+  unpatchSessionStorage();
   clearDisposables();
-  lastAgentId = null;
+  if (_routeWrapDisposable) {
+    _routeWrapDisposable.dispose();
+    _routeWrapDisposable = null;
+  }
   console.log("[agent-avatar-pro] Avatar monitor stopped");
 }
-const host$3 = ((_a = window.QwenPaw) == null ? void 0 : _a.host) ?? {};
+const host$3 = ((_b = window.QwenPaw) == null ? void 0 : _b.host) ?? {};
 const React$3 = host$3.React ?? { createElement: () => null, useState: () => [null, () => {
 }], useEffect: () => {
 } };
@@ -325,7 +415,7 @@ function AvatarRenderer({
     onError: () => setImgSrc(null)
   });
 }
-const host$2 = ((_b = window.QwenPaw) == null ? void 0 : _b.host) ?? {};
+const host$2 = ((_c = window.QwenPaw) == null ? void 0 : _c.host) ?? {};
 const React$2 = host$2.React ?? {
   createElement: () => null,
   useState: () => [null, () => {
@@ -721,7 +811,7 @@ async function shouldSkipCrop(file) {
   }
   return false;
 }
-const host$1 = ((_c = window.QwenPaw) == null ? void 0 : _c.host) ?? {};
+const host$1 = ((_d = window.QwenPaw) == null ? void 0 : _d.host) ?? {};
 const React$1 = host$1.React ?? {
   createElement: () => null,
   useState: () => [null, () => {
@@ -1003,7 +1093,7 @@ function AvatarUploader({
     })
   );
 }
-const host = ((_d = window.QwenPaw) == null ? void 0 : _d.host) ?? {};
+const host = ((_e = window.QwenPaw) == null ? void 0 : _e.host) ?? {};
 const React = host.React ?? { createElement: () => null, useState: () => [null, () => {
 }], useEffect: () => {
 }, useCallback: (fn) => fn, useMemo: (fn) => fn(), useRef: () => ({ current: null }) };
@@ -1316,7 +1406,7 @@ class AgentAvatarProPlugin {
     try {
       startAvatarMonitor();
     } catch (e) {
-      console.warn("[agent-avatar-pro] Chat avatar monitor failed to start:", e);
+      console.warn("[agent-avatar-pro] Chat avatar injector failed to start:", e);
     }
   }
   dispose() {

@@ -1302,3 +1302,42 @@ agent-avatar-pro/
 **理由：** QwenPaw 的插件管理页组件在渲染插件列表时，直接使用 `name` 和 `description` 字段值作为 React 子元素。i18n 对象格式 `{zh-CN, en-US}` 在首次安装后 i18n 解析器未就绪时会导致 React 渲染崩溃（问题 38）。纯字符串 + `*_i18n` 后缀字段是 QwenPaw 官方推荐的 i18n 模式（参照 qwenpaw-pet 插件），框架在适当时机解析 `*_i18n` 字段并替换原始字符串。
 
 ---
+
+## 第十二阶段：新版 QwenPaw 迁移（2026-07-17）
+
+**任务：** 参照官方迁移文档 `D:\QwenPaw-source\website\public\docs\plugins-migration.en.md`，将现有插件适配新版 QwenPaw。
+
+**迁移分析：**
+
+1. **plugin.json 版本声明** — 旧版仅使用 `min_version: "1.1.0"`，新版加载器会校验版本兼容性，不兼容的插件被记录为 `enabled=false` 且 `register()` 不执行。需添加 `qwenpaw_version` 字段（含 min/max），并保留 `min_version` 实现新旧双向兼容。
+
+2. **后端入口 `plugin` 实例导出** — 已确认 `plugin.py` 末尾存在 `plugin = AgentAvatarProPlugin()`，符合新版加载器要求。
+
+3. **`register_prompt_section()` 参数顺序变更** — 全项目 grep 搜索确认未使用此 API，无需迁移。
+
+4. **后端公共 API 签名兼容** — 本插件使用的 `register_tool`、`register_http_router`、`register_startup_hook`、`register_shutdown_hook`、`register_uninstall_hook` 签名在新版保持兼容，无需改动。
+
+5. **前端 Host SDK 兼容** — `window.QwenPaw.*` 系列 API（host/menu/route/slot/chat）在新版保持兼容，无需改动。
+
+6. **Skill Provider 行为变更** — 本插件未使用 `register_skill_provider()`，无影响。
+
+7. **新版 API（可选采用）** — `register_middleware`、`register_slash_command`、`register_mode`、`register_runtime_hook`、`register_agent_stop_handler` 等为新增 API，旧版插件无需强制迁移。
+
+**完成内容：**
+
+- `plugin.json` — 新增 `qwenpaw_version` 字段：
+  ```json
+  "qwenpaw_version": {
+    "min": "1.1.0",
+    "max": "3.0.0"
+  }
+  ```
+  保留原有 `min_version: "1.1.0"` 以兼容旧版 QwenPaw 加载器（旧版忽略未知 `qwenpaw_version` 字段）。
+
+**版本范围选择依据：**
+- `min: "1.1.0"` — 与现有 `min_version` 保持一致，覆盖已验证的旧版（1.1.x）和新版（2.0.x）。
+- `max: "3.0.0"` — 排除上限，留出充足的新版兼容窗口，避免文档中提到的"仅 `min_version` 时被推导为过窄兼容区间"问题。
+
+**影响文件：** `plugin.json`
+
+---

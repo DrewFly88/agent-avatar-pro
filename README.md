@@ -15,16 +15,21 @@ QwenPaw Agent 自定义头像插件 — 为每个 Agent 设置专属头像，支
 
 | 格式 | 扩展名 | 类型 | 说明 |
 |------|--------|------|------|
-| PNG | `.png` | 静态/动画 | 支持 APNG 动画 |
+| PNG | `.png` | 静态 | 通用位图格式 |
+| APNG | `.png` | 动画 | 自动检测 `acTL` chunk 区分 APNG |
 | JPEG | `.jpg`, `.jpeg` | 静态 | 照片类头像 |
 | GIF | `.gif` | 动画 | 传统动画格式 |
-| WebP | `.webp` | 静态/动画 | 现代高效格式 |
-| SVG | `.svg` | 矢量 | 任意放大不模糊 |
+| WebP | `.webp` | 静态/动画 | 现代高效格式，自动检测动画帧 |
+| SVG | `.svg` | 矢量 | 任意放大不模糊，上传时自动 XSS 清洗 |
 | Lottie | `.json` | 动画 | After Effects 矢量动画 |
+
+格式检测通过文件头 Magic bytes 实现，不依赖扩展名，也不依赖第三方库（`python-magic`/`filetype`）。SVG 额外支持 `<?xml` 声明开头的文件。
 
 ## 安装
 
-**前置条件：** QwenPaw >= 1.1.0，插件目录中包含 `dist/index.js`（已预构建）。
+**前置条件：** QwenPaw >= 1.1.0（支持 1.1.x 旧版和 2.0.x 新版），插件目录中包含 `dist/index.js`（已预构建）。
+
+> **新版 QwenPaw 兼容性：** `plugin.json` 同时声明了 `min_version: "1.1.0"`（旧版加载器读取）和 `qwenpaw_version: {min: "1.1.0", max: "3.0.0"}`（新版加载器读取），实现新旧双向兼容。
 
 ```bash
 # 关闭 QwenPaw 后执行
@@ -99,29 +104,36 @@ Agent 会自动调用注册的工具函数完成操作。
 
 ```
 agent-avatar-pro/
-├── plugin.json             # 插件清单
+├── plugin.json             # 插件清单（含 qwenpaw_version 新版兼容声明）
 ├── plugin.py               # 后端入口：路由、工具、生命周期钩子
-├── avatar_service.py       # 头像管理服务
-├── avatar_backend.py       # Agent 工具函数
+├── avatar_service.py       # 头像管理服务（存储/格式检测/压缩/SVG清洗/单例）
+├── avatar_backend.py       # Agent 工具函数（直接调用 Service，无 HTTP 回环）
 ├── requirements.txt        # Python 依赖（QwenPaw 自带）
 ├── build.bat / install.bat # Windows 构建/安装脚本
 ├── dist/
-│   └── index.js            # 前端构建产物（~45KB）
+│   ├── index.js            # 前端构建产物（~45KB / gzip ~12KB）
+│   └── index.js.map        # Source Map
 ├── frontend/
+│   ├── package.json
+│   ├── vite.config.ts      # jsxRuntime: classic, external: react/react-dom/antd
+│   ├── tsconfig.json       # jsx: react, types: []
 │   └── src/
-│       ├── index.tsx        # 前端入口
-│       ├── api.ts           # API 封装层
-│       ├── AvatarManager.tsx    # 管理面板
-│       ├── AvatarUploader.tsx   # 上传组件
+│       ├── index.tsx        # 前端入口（route.add + menu.add + startAvatarMonitor）
+│       ├── api.ts           # API 封装层（host.fetch 认证代理 + 指数退避重试）
+│       ├── AvatarManager.tsx    # 管理面板（antd Table/Card/AutoComplete）
+│       ├── AvatarUploader.tsx   # 上传组件（拖拽/点击/URL 三模式 + 覆盖确认）
 │       ├── AvatarRenderer.tsx   # 多格式渲染器
-│       ├── ChatAvatar.tsx       # 聊天窗口头像
-│       ├── CropModal.tsx        # 圆形裁剪弹窗
+│       ├── ChatAvatar.tsx       # 聊天窗口头像（route.wrap 条件触发 + storage 事件驱动 + 阶梯重试）
+│       ├── CropModal.tsx        # 圆形裁剪弹窗（Canvas CTM 管线 + 360° 旋转滑块）
 │       ├── qwenpaw-host.d.ts    # Host SDK 类型声明
 │       └── types.ts             # TypeScript 类型
+├── tests/
+│   └── test_all.py          # 自动化测试（51 项）
 └── docs/
-    ├── DEVLOG.md            # 开发日志
+    ├── DEVLOG.md            # 开发日志（39 个问题 + 22 项设计决策 + Phase 12 迁移）
     ├── GUIDE.md             # 详细使用说明
     ├── TESTING.md           # 测试说明
+    ├── LOTTIE_DESIGN.md     # Lottie 动画渲染方案
     └── QWENPAW_UNDERSTANDING.md # QwenPaw 平台理解与开发经验
 ```
 
@@ -153,20 +165,28 @@ build.bat
 
 ## 数据存储
 
-每个 Agent 的头像数据存储在独立子目录：
+每个 Agent 的头像数据存储在独立子目录。实际存储路径取决于 `plugin.py` 传入的 `plugin_dir` 参数：
+
+- **主要路径**（新版默认）：`<插件安装目录>/data/{agent_id}/`
+- **回退路径**（兼容旧版）：`~/.qwenpaw/plugins/agent-avatar-pro/data/{agent_id}/`
 
 ```
-~/.qwenpaw/plugins/agent-avatar-pro/data/
+data/
 ├── my-agent/
 │   ├── avatar.png       # 原始头像
 │   ├── thumbnail.png    # 缩略图（48x48）
-│   └── meta.json        # 元数据
+│   ├── meta.json        # 元数据（格式、来源、上传时间、历史记录）
+│   └── backup/          # 覆盖时自动备份的旧文件（仅保留最近一次）
 └── url-agent/
     └── meta.json        # URL 头像仅存元数据
 ```
 
+**覆盖机制：** 对已有头像的 Agent 再次设置头像时，后端自动备份旧文件到 `backup/` 子目录，并在 `meta.json` 的 `history` 数组中记录替换历史（格式、来源、时间戳）。file→URL 切换时会清理残留的 avatar/thumbnail 文件。
+
 ## 文档
 
+- [开发日志](docs/DEVLOG.md) — 39 个问题记录、22 项设计决策、Phase 12 新版迁移
 - [详细使用说明](docs/GUIDE.md) — 安装配置、API 参考、常见问题
 - [测试说明](docs/TESTING.md) — API 测试、安全测试、格式兼容性测试的完整步骤
-- [开发日志](docs/DEVLOG.md) — 开发进度、39 个问题记录、22 项设计决策
+- [Lottie 渲染方案](docs/LOTTIE_DESIGN.md) — Lottie 动画在 QwenPaw 前端的渲染设计
+- [QwenPaw 平台理解](docs/QWENPAW_UNDERSTANDING.md) — QwenPaw 内部机制与开发经验

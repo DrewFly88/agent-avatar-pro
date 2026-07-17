@@ -21,8 +21,23 @@ import type { AvatarUploaderProps, AvatarUploadResponse } from "./types";
 import { uploadAvatar, setAvatarUrl, checkAvatar, fetchAvatar, getAvatarImageUrl } from "./api";
 import CropModal, { shouldSkipCrop } from "./CropModal";
 import { refreshCurrentAvatar } from "./ChatAvatar";
+import LottieRenderer from "./LottieRenderer";
 
 const ACCEPT_DEFAULT = ".png,.jpg,.jpeg,.gif,.webp,.svg,.apng,.json";
+
+/**
+ * 将 base64 编码的 Lottie JSON 解码为 JS 对象。
+ * atob() 解码 base64 为 ASCII 字符串（Lottie JSON 是纯 ASCII 文本，安全可用）。
+ * 失败时返回 null，由调用方回退到 poster.png 或 FallbackIcon。
+ */
+function decodeLottieData(b64: string): unknown | null {
+  try {
+    const jsonStr = atob(b64);
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
 
 export default function AvatarUploader({
   agentId,
@@ -46,6 +61,7 @@ export default function AvatarUploader({
     format?: string;
     source?: string;
     imgSrc?: string;
+    lottieData?: unknown | null;
   } | null>(null);
 
   // 组件挂载或 agentId 变化时，加载当前头像
@@ -60,6 +76,30 @@ export default function AvatarUploader({
       .then((data) => {
         if (cancelled) return;
         if (data.ok) {
+          // Lottie 分支：解析 base64 JSON → LottieRenderer 预览
+          if (data.format === "json" && data.type === "file" && data.data) {
+            const parsed = decodeLottieData(data.data);
+            setCurrentAvatar({
+              hasAvatar: true,
+              format: data.format,
+              source: data.type,
+              lottieData: parsed,
+              imgSrc: parsed ? undefined : getAvatarImageUrl(agentId),
+            });
+            return;
+          }
+          // URL 类型 Lottie：回退到 /image 端点（后端返回 poster.png）
+          if (data.format === "json" && data.type === "url") {
+            setCurrentAvatar({
+              hasAvatar: true,
+              format: data.format,
+              source: data.type,
+              imgSrc: getAvatarImageUrl(agentId),
+              lottieData: null,
+            });
+            return;
+          }
+          // 其他格式：保持原有 <img> 预览
           let imgSrc: string;
           if (data.type === "url" && data.url) {
             imgSrc = data.url;
@@ -73,6 +113,7 @@ export default function AvatarUploader({
             format: data.format,
             source: data.type,
             imgSrc,
+            lottieData: null,
           });
         } else {
           setCurrentAvatar({ hasAvatar: false });
@@ -249,19 +290,29 @@ export default function AvatarUploader({
       React.createElement("span", {
         style: { fontSize: 12, color: "#888", whiteSpace: "nowrap" },
       }, "当前头像:"),
-      React.createElement("img", {
-        key: currentAvatar.imgSrc || "none",
-        src: currentAvatar.imgSrc || "",
-        alt: "当前头像",
-        style: {
-          width: 40,
-          height: 40,
-          borderRadius: "50%",
-          objectFit: "cover" as const,
-          border: "2px solid #d9d9d9",
-        },
-        onError: (e: any) => { e.target.style.display = "none"; },
-      }),
+      // Lottie 预览分支
+      currentAvatar.format === "json" && currentAvatar.lottieData
+        ? React.createElement(LottieRenderer, {
+            animationData: currentAvatar.lottieData,
+            size: 40,
+            shape: "circle",
+            fallback: React.createElement("div", {
+              style: { width: 40, height: 40, borderRadius: "50%", background: "#e8eaf6" },
+            }),
+          })
+        : React.createElement("img", {
+            key: currentAvatar.imgSrc || "none",
+            src: currentAvatar.imgSrc || "",
+            alt: "当前头像",
+            style: {
+              width: 40,
+              height: 40,
+              borderRadius: "50%",
+              objectFit: "cover" as const,
+              border: "2px solid #d9d9d9",
+            },
+            onError: (e: any) => { e.target.style.display = "none"; },
+          }),
       React.createElement("span", {
         style: { fontSize: 12, color: "#666" },
       }, `${currentAvatar.format || "unknown"} · ${currentAvatar.source === "url" ? "URL" : "文件上传"}`)

@@ -1,4 +1,4 @@
-var _a, _b, _c, _d, _e;
+var _a, _b, _c, _d, _e, _f;
 function hostFetch(path, init) {
   var _a2, _b2;
   const host2 = (_a2 = window.QwenPaw) == null ? void 0 : _a2.host;
@@ -100,9 +100,133 @@ function getAvatarImageUrl(agentId, bust = true) {
   const base = (host2 == null ? void 0 : host2.getApiUrl) ? host2.getApiUrl(`/avatar-pro/${agentId}/image`) : `/api/avatar-pro/${agentId}/image`;
   return bust ? `${base}?t=${Date.now()}` : base;
 }
+const CDN_URL = "https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js";
+let loadPromise = null;
+function loadLottie() {
+  const w = window;
+  if (w.lottie) {
+    return Promise.resolve(w.lottie);
+  }
+  if (loadPromise) return loadPromise;
+  loadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = CDN_URL;
+    script.async = true;
+    script.onload = () => {
+      if (w.lottie) {
+        resolve(w.lottie);
+      } else {
+        loadPromise = null;
+        reject(new Error("lottie-web loaded but window.lottie not found"));
+      }
+    };
+    script.onerror = () => {
+      loadPromise = null;
+      reject(new Error("Failed to load lottie-web from CDN"));
+    };
+    document.head.appendChild(script);
+  });
+  return loadPromise;
+}
+const host$5 = ((_a = window.QwenPaw) == null ? void 0 : _a.host) ?? {};
+const React$5 = host$5.React ?? {
+  createElement: () => null,
+  useRef: () => ({ current: null }),
+  useState: () => [null, () => {
+  }],
+  useEffect: () => {
+  }
+};
+function LottieRenderer({
+  animationData,
+  size,
+  shape = "circle",
+  fallback,
+  className
+}) {
+  const containerRef = React$5.useRef(null);
+  const animRef = React$5.useRef(null);
+  const [state, setState] = React$5.useState("loading-lib");
+  React$5.useEffect(() => {
+    if (!containerRef.current || !animationData) return;
+    let cancelled = false;
+    let animInstance = null;
+    setState("loading-lib");
+    loadLottie().then((lottie) => {
+      if (cancelled || !containerRef.current) return;
+      containerRef.current.innerHTML = "";
+      animInstance = lottie.loadAnimation({
+        container: containerRef.current,
+        renderer: "svg",
+        // SVG 渲染：矢量无损，适合任意尺寸
+        loop: true,
+        autoplay: true,
+        animationData,
+        rendererSettings: {
+          preserveAspectRatio: "xMidYMid slice"
+          // 居中裁剪填充，等效 object-fit: cover
+        }
+      });
+      animRef.current = animInstance;
+      if (!cancelled) setState("rendering");
+    }).catch(() => {
+      if (!cancelled) setState("error");
+    });
+    return () => {
+      cancelled = true;
+      if (animInstance) {
+        try {
+          animInstance.destroy();
+        } catch {
+        }
+        animInstance = null;
+      }
+      animRef.current = null;
+    };
+  }, [animationData]);
+  const borderRadius = shape === "circle" ? "50%" : "8px";
+  if (state === "loading-lib" || state === "error") {
+    return React$5.createElement(
+      "div",
+      {
+        className,
+        style: {
+          width: size,
+          height: size,
+          borderRadius,
+          background: "linear-gradient(135deg, #e8eaf6, #c5cae9)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          overflow: "hidden"
+        }
+      },
+      fallback ?? null
+    );
+  }
+  return React$5.createElement("div", {
+    ref: containerRef,
+    className,
+    style: {
+      width: size,
+      height: size,
+      borderRadius,
+      overflow: "hidden",
+      display: "block"
+    }
+  });
+}
 const PLUGIN_ID$1 = "agent-avatar-pro";
 const AGENT_STORAGE_KEY = "qwenpaw-agent-storage";
-const host$4 = ((_a = window.QwenPaw) == null ? void 0 : _a.host) ?? {};
+function decodeLottieData$2(b64) {
+  try {
+    const jsonStr = atob(b64);
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
+const host$4 = ((_b = window.QwenPaw) == null ? void 0 : _b.host) ?? {};
 const React$4 = host$4.React ?? { createElement: () => null, useRef: () => ({ current: null }) };
 let agentNameCache = /* @__PURE__ */ new Map();
 let agentCacheLoaded = false;
@@ -159,21 +283,45 @@ async function updateChatAvatar(agentId) {
     getAgentName(agentId)
   ]);
   let avatarUrl;
+  let lottieData = null;
   if (check.ok && check.has_avatar) {
     if (check.type === "url" && check.url) {
       avatarUrl = check.url;
     } else {
-      avatarUrl = getImageUrl(agentId);
+      try {
+        const data = await fetchAvatar(agentId);
+        if (data.ok && data.format === "json" && data.data) {
+          lottieData = decodeLottieData$2(data.data);
+          if (!lottieData) {
+            avatarUrl = getImageUrl(agentId);
+          }
+        } else {
+          avatarUrl = getImageUrl(agentId);
+        }
+      } catch {
+        avatarUrl = getImageUrl(agentId);
+      }
     }
   }
   if (check.ok) {
     _avatarConfirmed = true;
   }
   console.log(
-    `[agent-avatar-pro] Setting nick for "${agentId}" → "${agentName}", avatar: ${avatarUrl || "(none)"}, check.ok: ${check.ok}`
+    `[agent-avatar-pro] Setting nick for "${agentId}" → "${agentName}", avatar: ${avatarUrl || (lottieData ? "(lottie)" : "(none)")}, check.ok: ${check.ok}`
   );
   const params = { nick: agentName };
-  if (avatarUrl) {
+  if (lottieData) {
+    params.avatar = React$4.createElement(LottieRenderer, {
+      animationData: lottieData,
+      size: 32,
+      // 聊天气泡头像尺寸（通常 32-40px）
+      shape: "circle",
+      fallback: React$4.createElement("div", {
+        style: { width: 32, height: 32, borderRadius: "50%", background: "#5c6bc0" }
+      })
+    });
+    avatarLoaded = true;
+  } else if (avatarUrl) {
     params.avatar = avatarUrl;
     avatarLoaded = true;
   }
@@ -322,12 +470,20 @@ function stopAvatarMonitor() {
   }
   console.log("[agent-avatar-pro] Avatar monitor stopped");
 }
-const host$3 = ((_b = window.QwenPaw) == null ? void 0 : _b.host) ?? {};
+const host$3 = ((_c = window.QwenPaw) == null ? void 0 : _c.host) ?? {};
 const React$3 = host$3.React ?? { createElement: () => null, useState: () => [null, () => {
 }], useEffect: () => {
 } };
 const DEFAULT_SIZE = 48;
 const DEFAULT_SHAPE = "circle";
+function decodeLottieData$1(b64) {
+  try {
+    const jsonStr = atob(b64);
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
 function FallbackIcon({ size }) {
   return React$3.createElement("div", {
     style: {
@@ -366,6 +522,7 @@ function AvatarRenderer({
 }) {
   const [imgSrc, setImgSrc] = React$3.useState(null);
   const [format, setFormat] = React$3.useState("");
+  const [lottieData, setLottieData] = React$3.useState(null);
   const [loading, setLoading] = React$3.useState(true);
   React$3.useEffect(() => {
     let cancelled = false;
@@ -373,6 +530,23 @@ function AvatarRenderer({
       if (cancelled) return;
       if (data.ok) {
         setFormat(data.format);
+        if (data.format === "json" && data.type === "file" && data.data) {
+          const parsed = decodeLottieData$1(data.data);
+          if (parsed) {
+            setLottieData(parsed);
+            setImgSrc(null);
+            return;
+          }
+          setLottieData(null);
+          setImgSrc(getAvatarImageUrl(agentId));
+          return;
+        }
+        if (data.format === "json" && data.type === "url") {
+          setLottieData(null);
+          setImgSrc(getAvatarImageUrl(agentId));
+          return;
+        }
+        setLottieData(null);
         if (data.type === "url" && data.url) {
           setImgSrc(data.url);
         } else if (data.type === "file" && data.data && data.mime) {
@@ -393,6 +567,15 @@ function AvatarRenderer({
   const borderRadius = shape === "circle" ? "50%" : "8px";
   if (loading) {
     return React$3.createElement(FallbackIcon, { size });
+  }
+  if (format === "json" && lottieData) {
+    return React$3.createElement(LottieRenderer, {
+      animationData: lottieData,
+      size,
+      shape,
+      className,
+      fallback: fallback ?? React$3.createElement(FallbackIcon, { size })
+    });
   }
   if (!imgSrc) {
     return React$3.createElement(
@@ -415,7 +598,7 @@ function AvatarRenderer({
     onError: () => setImgSrc(null)
   });
 }
-const host$2 = ((_c = window.QwenPaw) == null ? void 0 : _c.host) ?? {};
+const host$2 = ((_d = window.QwenPaw) == null ? void 0 : _d.host) ?? {};
 const React$2 = host$2.React ?? {
   createElement: () => null,
   useState: () => [null, () => {
@@ -811,7 +994,7 @@ async function shouldSkipCrop(file) {
   }
   return false;
 }
-const host$1 = ((_d = window.QwenPaw) == null ? void 0 : _d.host) ?? {};
+const host$1 = ((_e = window.QwenPaw) == null ? void 0 : _e.host) ?? {};
 const React$1 = host$1.React ?? {
   createElement: () => null,
   useState: () => [null, () => {
@@ -823,6 +1006,14 @@ const React$1 = host$1.React ?? {
 const antd$1 = host$1.antd ?? {};
 const { Upload, Input: Input$1, Button: Button$1, Space: Space$1, message: message$1, Modal } = antd$1;
 const ACCEPT_DEFAULT = ".png,.jpg,.jpeg,.gif,.webp,.svg,.apng,.json";
+function decodeLottieData(b64) {
+  try {
+    const jsonStr = atob(b64);
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
 function AvatarUploader({
   agentId,
   maxSizeMB = 5,
@@ -846,6 +1037,27 @@ function AvatarUploader({
     fetchAvatar(agentId).then((data) => {
       if (cancelled) return;
       if (data.ok) {
+        if (data.format === "json" && data.type === "file" && data.data) {
+          const parsed = decodeLottieData(data.data);
+          setCurrentAvatar({
+            hasAvatar: true,
+            format: data.format,
+            source: data.type,
+            lottieData: parsed,
+            imgSrc: parsed ? void 0 : getAvatarImageUrl(agentId)
+          });
+          return;
+        }
+        if (data.format === "json" && data.type === "url") {
+          setCurrentAvatar({
+            hasAvatar: true,
+            format: data.format,
+            source: data.type,
+            imgSrc: getAvatarImageUrl(agentId),
+            lottieData: null
+          });
+          return;
+        }
         let imgSrc;
         if (data.type === "url" && data.url) {
           imgSrc = data.url;
@@ -858,7 +1070,8 @@ function AvatarUploader({
           hasAvatar: true,
           format: data.format,
           source: data.type,
-          imgSrc
+          imgSrc,
+          lottieData: null
         });
       } else {
         setCurrentAvatar({ hasAvatar: false });
@@ -1005,7 +1218,15 @@ function AvatarUploader({
       React$1.createElement("span", {
         style: { fontSize: 12, color: "#888", whiteSpace: "nowrap" }
       }, "当前头像:"),
-      React$1.createElement("img", {
+      // Lottie 预览分支
+      currentAvatar.format === "json" && currentAvatar.lottieData ? React$1.createElement(LottieRenderer, {
+        animationData: currentAvatar.lottieData,
+        size: 40,
+        shape: "circle",
+        fallback: React$1.createElement("div", {
+          style: { width: 40, height: 40, borderRadius: "50%", background: "#e8eaf6" }
+        })
+      }) : React$1.createElement("img", {
         key: currentAvatar.imgSrc || "none",
         src: currentAvatar.imgSrc || "",
         alt: "当前头像",
@@ -1093,7 +1314,7 @@ function AvatarUploader({
     })
   );
 }
-const host = ((_e = window.QwenPaw) == null ? void 0 : _e.host) ?? {};
+const host = ((_f = window.QwenPaw) == null ? void 0 : _f.host) ?? {};
 const React = host.React ?? { createElement: () => null, useState: () => [null, () => {
 }], useEffect: () => {
 }, useCallback: (fn) => fn, useMemo: (fn) => fn(), useRef: () => ({ current: null }) };

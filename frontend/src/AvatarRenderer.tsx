@@ -11,9 +11,24 @@ const React: typeof ReactNS = host.React ?? { createElement: () => null, useStat
 
 import type { AvatarRendererProps, AvatarDataResponse } from './types';
 import { fetchAvatar, getAvatarImageUrl } from './api';
+import LottieRenderer from './LottieRenderer';
 
 const DEFAULT_SIZE = 48;
 const DEFAULT_SHAPE = 'circle';
+
+/**
+ * 将 base64 编码的 Lottie JSON 解码为 JS 对象。
+ * atob() 解码 base64 为 ASCII 字符串（Lottie JSON 是纯 ASCII 文本，安全可用）。
+ * 失败时返回 null，由调用方回退到 FallbackIcon 或 poster.png。
+ */
+function decodeLottieData(b64: string): unknown | null {
+  try {
+    const jsonStr = atob(b64);
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
 
 function FallbackIcon({ size }: { size: number }) {
   return React.createElement("div", {
@@ -52,6 +67,7 @@ export default function AvatarRenderer({
 }: AvatarRendererProps) {
   const [imgSrc, setImgSrc] = React.useState<string | null>(null);
   const [format, setFormat] = React.useState<string>('');
+  const [lottieData, setLottieData] = React.useState<unknown | null>(null);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
@@ -62,6 +78,27 @@ export default function AvatarRenderer({
         if (cancelled) return;
         if (data.ok) {
           setFormat(data.format);
+          // Lottie 分支：base64 → JSON.parse → LottieRenderer
+          if (data.format === 'json' && data.type === 'file' && data.data) {
+            const parsed = decodeLottieData(data.data);
+            if (parsed) {
+              setLottieData(parsed);
+              setImgSrc(null);
+              return;
+            }
+            // 解析失败：回退到 /image 端点（后端返回 poster.png）
+            setLottieData(null);
+            setImgSrc(getAvatarImageUrl(agentId));
+            return;
+          }
+          // URL 类型 Lottie：无法直接渲染远程 JSON 动画，回退到 /image 端点
+          if (data.format === 'json' && data.type === 'url') {
+            setLottieData(null);
+            setImgSrc(getAvatarImageUrl(agentId));
+            return;
+          }
+          // 其他格式保持原有 <img> 路径
+          setLottieData(null);
           if (data.type === 'url' && data.url) {
             setImgSrc(data.url);
           } else if (data.type === 'file' && data.data && data.mime) {
@@ -85,6 +122,17 @@ export default function AvatarRenderer({
 
   if (loading) {
     return React.createElement(FallbackIcon, { size });
+  }
+
+  // Lottie 渲染分支
+  if (format === 'json' && lottieData) {
+    return React.createElement(LottieRenderer, {
+      animationData: lottieData,
+      size,
+      shape,
+      className,
+      fallback: fallback ?? React.createElement(FallbackIcon, { size }),
+    });
   }
 
   if (!imgSrc) {

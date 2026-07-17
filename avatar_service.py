@@ -180,6 +180,12 @@ class AvatarService:
                 self._resize_image(avatar_path, target_px)
                 self._generate_thumbnail(avatar_path, agent_dir / f"thumbnail.{ext}")
 
+        # 6.5 Lottie → 生成静态封面 poster.png
+        # /image 端点对 Lottie 格式返回 poster.png，使 <img src> 和
+        # chat.welcome.set({avatar: url}) 能正常加载（CDN 不可用时的回退）
+        if fmt == "json":
+            self._generate_lottie_poster(agent_dir, file_data)
+
         # 7. Save metadata (含历史记录)
         meta = {
             "format": fmt,
@@ -343,6 +349,13 @@ class AvatarService:
         if meta.get("source") == "url":
             return None
 
+        # Lottie 格式：返回静态封面 poster.png（浏览器无法渲染原始 JSON）
+        if meta.get("format") == "json":
+            poster_path = agent_dir / "poster.png"
+            if poster_path.exists():
+                return poster_path.read_bytes(), "image/png"
+            return None
+
         filename = meta.get("filename", "avatar.png")
         if size == "thumb":
             thumb_name = filename.replace("avatar.", "thumbnail.")
@@ -478,6 +491,31 @@ class AvatarService:
             return False
         # flags 字节位于 VP8X chunk 起始 + 8 = offset 20
         return (data[20] & 0x02) != 0
+
+    @staticmethod
+    def _generate_lottie_poster(agent_dir: Path, json_data: bytes) -> None:
+        """从 Lottie JSON 生成静态封面 poster.png。
+
+        策略：读取 JSON 的 w/h 尺寸，生成同尺寸的品牌色占位 PNG。
+        /image 端点对 Lottie 格式返回此 poster.png，使 <img src> 和
+        chat.welcome.set({avatar: url}) 能正常加载。
+
+        后续可升级为使用 cairosvg 或 Pillow 绘制首帧静态图，
+        但首帧渲染需要完整 Lottie 引擎，Python 侧无成熟方案。
+        """
+        if not Image:
+            return
+        try:
+            meta = json.loads(json_data)
+            w = int(meta.get("w", DEFAULT_AVATAR_PX))
+            h = int(meta.get("h", DEFAULT_AVATAR_PX))
+            # 限制尺寸避免恶意超大 JSON 导致 OOM
+            w = max(1, min(w, 1024))
+            h = max(1, min(h, 1024))
+            img = Image.new("RGBA", (w, h), (92, 107, 192, 255))  # 品牌色占位
+            img.save(agent_dir / "poster.png", "PNG")
+        except Exception:
+            pass  # Non-critical: 聊天窗口和管理面板仍可走 LottieRenderer CDN 路径
 
     @staticmethod
     def _sanitize_svg(data: bytes) -> bytes:

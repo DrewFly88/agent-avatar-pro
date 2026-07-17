@@ -30,11 +30,26 @@
  * - Agent 状态由 zustand + persist 管理，key: "qwenpaw-agent-storage"
  */
 
-import { checkAvatar, fetchAgents } from './api';
+import { checkAvatar, fetchAgents, fetchAvatar } from './api';
 import type { AgentInfo } from './types';
+import LottieRenderer from './LottieRenderer';
 
 const PLUGIN_ID = "agent-avatar-pro";
 const AGENT_STORAGE_KEY = "qwenpaw-agent-storage";
+
+/**
+ * 将 base64 编码的 Lottie JSON 解码为 JS 对象。
+ * atob() 解码 base64 为 ASCII 字符串（Lottie JSON 是纯 ASCII 文本，安全可用）。
+ * 失败时返回 null，由调用方回退到 poster.png URL。
+ */
+function decodeLottieData(b64: string): unknown | null {
+  try {
+    const jsonStr = atob(b64);
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
 
 // ── Host SDK 获取 ────────────────────────────────────────────────
 const host = window.QwenPaw?.host ?? {} as any;
@@ -120,11 +135,30 @@ async function updateChatAvatar(agentId: string): Promise<void> {
   ]);
 
   let avatarUrl: string | undefined;
+  let lottieData: unknown | null = null;
+
   if (check.ok && check.has_avatar) {
     if (check.type === "url" && check.url) {
       avatarUrl = check.url;
     } else {
-      avatarUrl = getImageUrl(agentId);
+      // 文件类型头像：通过 fetchAvatar 获取 base64 数据
+      // Lottie 格式 → 解析为 JS 对象，渲染为 LottieRenderer ReactNode
+      // 其他格式 → 回退到 /image 端点 URL
+      try {
+        const data = await fetchAvatar(agentId);
+        if (data.ok && data.format === "json" && data.data) {
+          lottieData = decodeLottieData(data.data);
+          if (!lottieData) {
+            // 解析失败：回退到 /image 端点（后端返回 poster.png）
+            avatarUrl = getImageUrl(agentId);
+          }
+        } else {
+          avatarUrl = getImageUrl(agentId);
+        }
+      } catch {
+        // fetchAvatar 失败：回退到 /image 端点
+        avatarUrl = getImageUrl(agentId);
+      }
     }
   }
 
@@ -134,16 +168,27 @@ async function updateChatAvatar(agentId: string): Promise<void> {
   }
 
   console.log(
-    `[agent-avatar-pro] Setting nick for "${agentId}" → "${agentName}", avatar: ${avatarUrl || "(none)"}, check.ok: ${check.ok}`
+    `[agent-avatar-pro] Setting nick for "${agentId}" → "${agentName}", avatar: ${avatarUrl || (lottieData ? "(lottie)" : "(none)")}, check.ok: ${check.ok}`
   );
 
-  // chat.welcome.set() 和 chat.response.set() 写入相同的字段
-  // (welcome.avatar / welcome.nick)，消息组件响应式读取，
-  // 调用后所有 AI 消息自动更新头像和名称
-  const params: Record<string, string> = { nick: agentName };
-  if (avatarUrl) {
+  // 构造传入 chat.welcome.set / chat.response.set 的参数
+  // v2.0 welcome.avatar 接受 Localized<string | React.ReactNode>，
+  // Lottie 格式传入 LottieRenderer ReactNode，其他格式传入 URL 字符串。
+  const params: Record<string, any> = { nick: agentName };
+  if (lottieData) {
+    // Lottie 动画：传入 ReactNode，由宿主渲染
+    params.avatar = React.createElement(LottieRenderer, {
+      animationData: lottieData,
+      size: 32, // 聊天气泡头像尺寸（通常 32-40px）
+      shape: "circle",
+      fallback: React.createElement("div", {
+        style: { width: 32, height: 32, borderRadius: "50%", background: "#5c6bc0" },
+      }),
+    });
+    avatarLoaded = true;
+  } else if (avatarUrl) {
     params.avatar = avatarUrl;
-    avatarLoaded = true; // 头像 URL 已获取，标记为成功
+    avatarLoaded = true;
   }
 
   try {

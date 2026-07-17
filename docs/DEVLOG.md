@@ -1341,3 +1341,78 @@ agent-avatar-pro/
 **影响文件：** `plugin.json`
 
 ---
+
+## 第十三阶段：Lottie 动画渲染实现（2026-07-17）
+
+**任务：** 基于 v2.0 新版 QwenPaw Host SDK，重新设计并实现 Lottie JSON 动画头像的完整渲染方案。
+
+**背景：** 旧版 `LOTTIE_DESIGN.md` 基于 v1.x 假设：`chat.response.set({avatar: url})` 仅接受 URL 字符串，因此聊天窗口 Lottie 头像只能降级为静态封面。通过阅读 v2.0 源码发现关键事实变化：
+
+| 旧版假设 | v2.0 实际 |
+|---------|----------|
+| `avatar` 仅接受 URL 字符串 | `welcome.avatar` 类型是 `Localized<string \| React.ReactNode>`（`console/src/plugins/registry/types.ts:252`）—— **支持 ReactNode** |
+| 无插槽机制注入自定义组件 | 存在 `response.render` / `request.render`，可整气泡替换返回任意 ReactNode |
+| `chat.welcome.set` / `chat.response.set` 写入全局字段 | v2.0 仍是 last-writer-wins 的 scalar stack，但字段类型已升级为 ReactNode 兼容 |
+
+**结论：** v2.0 的 chat API 已支持传入 React 组件作为头像。Lottie 动画**可以直接在聊天气泡中播放**，无需降级为静态封面——旧方案的核心前提已过时。
+
+**完成内容：**
+
+### Phase A — lottie-web 加载器 + 渲染组件
+
+- **新建 `frontend/src/LottieLoader.ts`（~68 行）**：CDN 动态加载器，全局单例 Promise 确保多次调用只加载一次，加载失败时重置 Promise 允许重试。CDN 地址版本锁定 `5.12.2`。
+- **新建 `frontend/src/LottieRenderer.tsx`（~134 行）**：Lottie 动画渲染组件，使用 lottie-web 在指定 DOM 容器中渲染 SVG 动画。关键设计：
+  - SVG 渲染模式：矢量无损，适合任意尺寸缩放
+  - `preserveAspectRatio: 'xMidYMid slice'`：等效 CSS `object-fit: cover`
+  - `loop: true, autoplay: true`：头像动画持续循环播放
+  - `useEffect` cleanup 调用 `anim.destroy()` 释放 SVG DOM 节点和动画定时器
+  - `cancelled` 标志防止异步加载 lottie-web 期间组件已卸载或 `animationData` 已变更
+
+### Phase B — AvatarRenderer/Uploader 分支
+
+- **修改 `frontend/src/AvatarRenderer.tsx`**：新增 `format === "json"` 分支，`fetchAvatar` 返回 Lottie 数据时通过 `atob()` → `JSON.parse()` 解码，渲染 `<LottieRenderer>`。解析失败或 URL 类型 Lottie 回退到 `/image` 端点。
+- **修改 `frontend/src/AvatarUploader.tsx`**：预览区域添加 Lottie 分支，`currentAvatar.format === "json" && currentAvatar.lottieData` 时渲染 `<LottieRenderer>` 替代 `<img>`。
+
+### Phase C — 后端 poster.png 生成 + /image 适配
+
+- **修改 `avatar_service.py`**：
+  - `upload_avatar()` 中 `fmt == "json"` 时调用 `_generate_lottie_poster()` 生成静态封面 `poster.png`（Pillow 纯色占位，按 Lottie 的 w/h 尺寸，限制最大 1024px 避免 OOM）
+  - `get_avatar_image()` 对 `meta.get("format") == "json"` 返回 `poster.png` 字节流（浏览器无法渲染原始 JSON）
+  - 新增 `_generate_lottie_poster()` 静态方法
+
+### Phase D — 聊天窗口动画渲染
+
+- **修改 `frontend/src/ChatAvatar.tsx`**：`updateChatAvatar()` 中检测 `format === "json"`，构造 `<LottieRenderer>` ReactNode 作为 `avatar` 字段传入 `chat.welcome.set` / `chat.response.set`。
+- **关键突破**：v2.0 的 `chat.welcome.set()` / `chat.response.set()` 的 `avatar` 字段接受 `React.ReactNode`，可以直接传入 `<LottieRenderer>` 组件实例。
+- **降级路径**：CDN 不可用时 `LottieRenderer` 内部 `loadLottie()` 失败回退到 `fallback` div；后端 `poster.png` 作为 CDN 不可用时的回退。
+
+### Phase E — 测试与文档
+
+- **后端测试**：`python tests/test_all.py` 51 项全部通过（exit 0）
+- **前端构建**：`cd frontend && npm run build` 成功，bundle 大小 50.76KB（gzip 13.27KB），相比 v5.5 的 44.51KB 增加 ~6KB（LottieLoader + LottieRenderer + 分支逻辑）
+- **文档更新**：
+  - `docs/LOTTIE_DESIGN.md` 全文重写，替换 v1.x 假设，记录 v2.0 ReactNode avatar 方案
+  - `docs/DEVLOG.md` 追加 Phase 13 记录（本节）
+
+**关键待验证假设：**
+
+**核心假设：v2.0 的 `welcome.avatar`/`response.avatar` 字段接受 ReactNode 并在宿主组件中正确渲染。**
+
+类型签名已确认允许 ReactNode（`types.ts:252`）。但运行时行为（宿主 `WelcomeCard`/`ResponseCard` 是否调用 `React.createElement` 渲染该 node，而非强制 `typeof === 'string'` 才显示）需要通过实际安装插件并观察聊天窗口来验证。
+
+若验证失败，方案自动降级为旧版 Phase B（后端 `poster.png` 静态封面 + `/image` URL），不影响其他 Phase。
+
+**影响文件：**
+
+| 文件 | 操作 |
+|------|------|
+| `frontend/src/LottieLoader.ts` | 新建 |
+| `frontend/src/LottieRenderer.tsx` | 新建 |
+| `frontend/src/AvatarRenderer.tsx` | 修改 |
+| `frontend/src/AvatarUploader.tsx` | 修改 |
+| `frontend/src/ChatAvatar.tsx` | 修改 |
+| `avatar_service.py` | 修改 |
+| `docs/LOTTIE_DESIGN.md` | 重写 |
+| `docs/DEVLOG.md` | 追加 |
+
+---

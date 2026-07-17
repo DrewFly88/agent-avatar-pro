@@ -48,10 +48,16 @@ export default function LottieRenderer({
 }: LottieRendererProps) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const animRef = React.useRef<any>(null);
+  const animDataRef = React.useRef<unknown>(animationData);
+  animDataRef.current = animationData;
   const [state, setState] = React.useState<LottieState>("loading-lib");
 
+  // useEffect 始终渲染 container div（带 ref），不依赖 state 分支。
+  // 修复 v1 bug：旧逻辑在 loading-lib 状态渲染 fallback div（无 ref），
+  // 导致 useEffect 运行时 containerRef.current 为 null，loadLottie() 永不被调用，
+  // 状态死锁在 loading-lib。
   React.useEffect(() => {
-    if (!containerRef.current || !animationData) return;
+    if (!animationData) return;
     let cancelled = false;
     let animInstance: any = null;
 
@@ -59,21 +65,42 @@ export default function LottieRenderer({
 
     loadLottie()
       .then((lottie: any) => {
-        if (cancelled || !containerRef.current) return;
+        if (cancelled) return;
+        // 此时组件已重渲染为 container div（state 切换前），containerRef 已绑定
+        const container = containerRef.current;
+        if (!container) {
+          // container 未就绪：切换 state 触发重渲染后再试
+          setState("rendering");
+          // 用 setTimeout 0 等 React commit 后下一 tick 重试
+          setTimeout(() => {
+            if (cancelled) return;
+            const c = containerRef.current;
+            if (!c) return;
+            c.innerHTML = "";
+            animInstance = lottie.loadAnimation({
+              container: c,
+              renderer: "svg",
+              loop: true,
+              autoplay: true,
+              animationData: animDataRef.current,
+              rendererSettings: { preserveAspectRatio: "xMidYMid slice" },
+            });
+            animRef.current = animInstance;
+          }, 0);
+          return;
+        }
         // 清空容器（可能上次渲染残留）
-        containerRef.current.innerHTML = "";
-
+        container.innerHTML = "";
         animInstance = lottie.loadAnimation({
-          container: containerRef.current,
+          container: container,
           renderer: "svg", // SVG 渲染：矢量无损，适合任意尺寸
           loop: true,
           autoplay: true,
-          animationData: animationData,
+          animationData: animDataRef.current,
           rendererSettings: {
             preserveAspectRatio: "xMidYMid slice", // 居中裁剪填充，等效 object-fit: cover
           },
         });
-
         animRef.current = animInstance;
         if (!cancelled) setState("rendering");
       })
@@ -97,8 +124,8 @@ export default function LottieRenderer({
 
   const borderRadius = shape === "circle" ? "50%" : "8px";
 
-  // 加载 lottie-web 库中 / 出错时：显示回退
-  if (state === "loading-lib" || state === "error") {
+  // error 状态：显示回退（loading-lib 也渲染 container div 但带半透明 fallback 背景）
+  if (state === "error") {
     return React.createElement(
       "div",
       {
@@ -119,7 +146,7 @@ export default function LottieRenderer({
     );
   }
 
-  // 动画渲染容器
+  // loading-lib / rendering：始终渲染 container div（带 ref），useEffect 可推进
   return React.createElement("div", {
     ref: containerRef,
     className,
@@ -129,6 +156,9 @@ export default function LottieRenderer({
       borderRadius,
       overflow: "hidden",
       display: "block",
+      background: state === "loading-lib"
+        ? "linear-gradient(135deg, #e8eaf6, #c5cae9)" // 加载中可见占位
+        : undefined,
     },
   });
 }

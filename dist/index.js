@@ -146,22 +146,44 @@ function LottieRenderer({
 }) {
   const containerRef = React$5.useRef(null);
   const animRef = React$5.useRef(null);
+  const animDataRef = React$5.useRef(animationData);
+  animDataRef.current = animationData;
   const [state, setState] = React$5.useState("loading-lib");
   React$5.useEffect(() => {
-    if (!containerRef.current || !animationData) return;
+    if (!animationData) return;
     let cancelled = false;
     let animInstance = null;
     setState("loading-lib");
     loadLottie().then((lottie) => {
-      if (cancelled || !containerRef.current) return;
-      containerRef.current.innerHTML = "";
+      if (cancelled) return;
+      const container = containerRef.current;
+      if (!container) {
+        setState("rendering");
+        setTimeout(() => {
+          if (cancelled) return;
+          const c = containerRef.current;
+          if (!c) return;
+          c.innerHTML = "";
+          animInstance = lottie.loadAnimation({
+            container: c,
+            renderer: "svg",
+            loop: true,
+            autoplay: true,
+            animationData: animDataRef.current,
+            rendererSettings: { preserveAspectRatio: "xMidYMid slice" }
+          });
+          animRef.current = animInstance;
+        }, 0);
+        return;
+      }
+      container.innerHTML = "";
       animInstance = lottie.loadAnimation({
-        container: containerRef.current,
+        container,
         renderer: "svg",
         // SVG 渲染：矢量无损，适合任意尺寸
         loop: true,
         autoplay: true,
-        animationData,
+        animationData: animDataRef.current,
         rendererSettings: {
           preserveAspectRatio: "xMidYMid slice"
           // 居中裁剪填充，等效 object-fit: cover
@@ -185,7 +207,7 @@ function LottieRenderer({
     };
   }, [animationData]);
   const borderRadius = shape === "circle" ? "50%" : "8px";
-  if (state === "loading-lib" || state === "error") {
+  if (state === "error") {
     return React$5.createElement(
       "div",
       {
@@ -212,7 +234,8 @@ function LottieRenderer({
       height: size,
       borderRadius,
       overflow: "hidden",
-      display: "block"
+      display: "block",
+      background: state === "loading-lib" ? "linear-gradient(135deg, #e8eaf6, #c5cae9)" : void 0
     }
   });
 }

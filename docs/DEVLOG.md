@@ -1416,3 +1416,56 @@ agent-avatar-pro/
 | `docs/DEVLOG.md` | 追加 |
 
 ---
+
+## 第十三阶段附录：Lottie 渲染端到端测试报告（2026-07-18）
+
+**测试环境：** QwenPaw v2.0.0.post3，端口 37711，浏览器 Chrome DevTools MCP。
+
+**部署方式：** `qwenpaw plugin install . --force` 遇 CLI bug（`Failed to install dependencies: Error: No such option '-m'`，CLI 内部 pip 参数错误，非插件问题），改用 bash 脚本直接复制文件到 `~/.copaw/plugins/agent-avatar-pro/` 绕过。`/api/plugins` 报 `enabled: true`，兼容性无 `is incompatible` 日志。
+
+### 测试结果矩阵
+
+| # | 测试项 | 结果 | 关键证据 |
+|---|--------|------|---------|
+| T1 | 管理面板 simple.json 渲染 | ✅ | SVG viewBox 200x200，`componentType: "LottieRenderer < AvatarRenderer"`，`windowLottie: "object"` |
+| T2 | complex.json 旋转方块动画 | ✅ | SVG viewBox 256x256，1 图层 |
+| T3 | 畸形 JSON 回退 | ✅ | `isFallbackBg: true`，fallback div 渲染 |
+| T4 | 超大 JSON (189KB, 1000 layers) | ✅ | SVG viewBox 500x500，1001 图层，内存 53928KB |
+| T5 | Lottie → PNG 切换销毁 | ✅ | 切换后头像列显示 FallbackIcon SVG（非 Lottie viewBox），无残留 |
+| T6 | 多 Lottie 并行渲染性能 | ✅ | 2 Lottie + 2 FallbackIcon，内存占用合理 |
+| **T7** | **聊天窗口 ReactNode avatar 核心验证** | **✅** | **`avatar: (lottie)` 日志 + main 内 viewBox 256x256 SVG + `qwenpaw-chat-anywhere-message-list-welcome` 容器** |
+| T8 | Agent 切换销毁无泄漏 | ✅ | 切回 default 后 `lottieSvgsCount: 0`（256x256 SVG 已销毁） |
+| T9 | CDN 不可用降级 | ✅ | 临时改 CDN URL 为 404 路径，`isFallbackBg: true`，无未捕获异常 |
+| T10 | `/image` 对 Lottie 返回 PNG | ✅ | `file` 报 `PNG image data`，magic bytes `89 50 4e 47` |
+| T11 | poster.png 尺寸正确 | ✅ | complex.json w=256 h=256 → poster.png 256x256/859B |
+| T12 | 覆盖更新 poster.png | ✅ | before 256x256/859B → after 200x200/594B，`replaced: true` |
+| R1 | PNG 头像 `/image` 路径回归 | ✅ | 64x64 PNG，`<img>` 路径未受影响 |
+| R2 | URL 头像设置回归 | ✅ | `type: "url"`，`replaced: true` |
+| R3 | 覆盖替换 history 回归 | ✅ | URL → PNG，`replaced: true, previous_format: "png"` |
+| R4 | 后端测试套件回归 | ✅ | `python tests/test_all.py` 51 项全通过（exit 0） |
+
+### 核心假设验证结论
+
+**v2.0 宿主 `WelcomeCard`/`ResponseCard` 运行时正确渲染 `avatar` 字段传入的 ReactNode 为 DOM。**
+
+- 类型签名（`types.ts:252`）允许 ReactNode ✅
+- 运行时行为已通过 T7 验证：`chat.welcome.set({avatar: <LottieRenderer/>})` 调用后，宿主在 `qwenpaw-chat-anywhere-message-list-welcome` 容器中渲染了 viewBox 256x256 的 SVG DOM ✅
+- **无需降级为 poster.png URL 方案**，主方案成功
+
+### 测试中发现并修复的 Bug
+
+**LottieRenderer 状态死锁 bug**（T1 首次验证时发现）：
+
+- **现象**：T1 首次测试时管理面板显示 FallbackIcon（`linear-gradient(135deg, ...)`）而非 Lottie SVG，`lottieScripts: 0`（DOM 无注入 script 标签），`windowLottie: undefined`。
+- **根因**：`LottieRenderer.tsx` 的 render 分支在 `state === "loading-lib"` 时返回 fallback div（**无 ref**），导致 useEffect 运行时 `containerRef.current` 绑定到 fallback div（无 ref 属性）= null，`if (!containerRef.current || !animationData) return;` 提前 return，**`loadLottie()` 永不被调用**，状态死锁在 loading-lib。
+- **修复**：改为 loading-lib / rendering 状态都渲染 container div（带 ref），仅 error 状态渲染 fallback div。useEffect 中若 `containerRef.current` 未就绪则 `setState("rendering")` 触发重渲染后用 setTimeout 0 重试。新增 `animDataRef` 避免 animationData 闭包过期。
+- **验证**：修复后 T1 重测 `lottieScripts: 1` + `windowLottie: "object"` + SVG viewBox 200x200 成功渲染。
+- **影响文件**：`frontend/src/LottieRenderer.tsx`
+
+### 已知限制
+
+1. **CLI 安装 bug**：`qwenpaw plugin install . --force` 报 `Failed to install dependencies: Error: No such option '-m'`（CLI 内部 pip 参数错误）。绕过方式：bash 脚本直接复制文件到 `~/.copaw/plugins/`。此为 QwenPaw CLI bug，非插件问题。
+2. **T9 降级验证方式**：JS 层拦截 `createElement('script')` 不可靠（页面重载清空拦截器）。采用临时修改 LottieLoader CDN URL 为不存在路径 + 重新构建部署的方式精确验证，测后已恢复。
+3. **poster.png 为纯色占位**：当前 poster.png 是 Pillow 生成的品牌色（#5C6BC0）纯色占位图，非 Lottie 首帧渲染。后续可引入 Python `lottie` 包解析 JSON 渲染首帧为 PNG，但依赖较重且不影响核心架构。
+
+---

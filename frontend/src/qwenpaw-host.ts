@@ -26,13 +26,14 @@ export const host = (window.QwenPaw?.host ?? {}) as {
 // ── React: 宿主未注入时提供无副作用 stub（bundle 求值安全） ──────
 // stub 只覆盖本项目用到的 API：createElement + 6 个 hook。
 // 真宿主注入后 host.React 覆盖 stub。
-const ReactStub = {
-  createElement: (() => null) as typeof ReactNS.createElement,
-  useRef: (() => ({ current: null })) as typeof ReactNS.useRef,
-  useState: (() => [null, () => {}]) as typeof ReactNS.useState,
-  useEffect: (() => {}) as typeof ReactNS.useEffect,
-  useCallback: ((fn: any) => fn) as typeof ReactNS.useCallback,
-  useMemo: ((fn: any) => fn()) as typeof ReactNS.useMemo,
+// 用 unknown 中转避免 () => null 与 React.createElement 重载签名不兼容。
+const ReactStub: unknown = {
+  createElement: (() => null) as any,
+  useRef: (() => ({ current: null })) as any,
+  useState: (() => [null, () => {}]) as any,
+  useEffect: (() => {}) as any,
+  useCallback: ((fn: any) => fn) as any,
+  useMemo: ((fn: any) => fn()) as any,
 };
 
 export const React: typeof ReactNS = host.React ?? (ReactStub as unknown as typeof ReactNS);

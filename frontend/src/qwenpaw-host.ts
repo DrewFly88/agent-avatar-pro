@@ -9,9 +9,34 @@
  * 确保 bundle 求值期宿主未注入时不抛异常。
  *
  * 类型声明见 qwenpaw-host.d.ts（ambient），本文件仅做运行时访问。
+ * 由于 tsconfig 的 include glob 不含 .d.ts（修复 vite 索引时遗漏），
+ * 在此运行时模块中追加 declare global 扩展 Window.QwenPaw，
+ * 让所有文件的 window.QwenPaw 访问通过类型检查。
  */
 
 import type * as ReactNS from "react";
+
+// ── ambient 扩展：让 window.QwenPaw 类型可识别 ──────────────────
+// QwenPawGlobal 形状见 qwenpaw-host.d.ts，这里用 any 兜底避免重复维护。
+declare global {
+  interface Window {
+    QwenPaw?: {
+      host?: {
+        React?: typeof ReactNS;
+        antd?: any;
+        getApiUrl?: (path: string) => string;
+        getApiToken?: () => string | null;
+        fetch?: (path: string, init?: RequestInit) => Promise<Response>;
+        [key: string]: any;
+      };
+      chat?: any;
+      route?: any;
+      menu?: any;
+      slot?: any;
+      [key: string]: any;
+    };
+  }
+}
 
 // ── host: 优先取 window.QwenPaw.host，缺失时空对象兜底 ───────────
 export const host = (window.QwenPaw?.host ?? {}) as {

@@ -1469,3 +1469,36 @@ agent-avatar-pro/
 3. **poster.png 为纯色占位**：当前 poster.png 是 Pillow 生成的品牌色（#5C6BC0）纯色占位图，非 Lottie 首帧渲染。后续可引入 Python `lottie` 包解析 JSON 渲染首帧为 PNG，但依赖较重且不影响核心架构。
 
 ---
+
+## 第十三阶段附录 B：测试 JSON 格式 bug 发现与基准验证（2026-07-18）
+
+**问题**：T1-T4 验证时管理面板 SVG 虽注入但形状不可见——`<g style="display: none;"><path></path></g>`（path 无 `d` 属性，形状数据为空），或 `<g clip-path="...">` 内无任何形状子节点。
+
+**调查**：对比 lottie-web 5.x 官方 JSON schema 与本项目测试 JSON（`simple.json` / `complex.json`），发现 scale keyframe 格式不合规：
+
+| 字段 | 我写的 | lottie-web 期望 | 说明 |
+|------|--------|----------------|------|
+| `layers[].ks.s.k` 中 `s` 值 | `[50]` / `[100]` / `[60]` / `[120]` **一维** | `[50, 50, 100]` / `[100, 100, 100]` **三维**（z 固定 100） | scale 是 3D 向量，缺维度导致 lottie-web 计算出 0 或 NaN 缩放矩阵，形状被缩到不可见 |
+
+**修复**：修正测试 JSON 的 scale keyframe `s` 值为三维 `[x, y, 100]`：
+- `simple.json`：`[50]` → `[50,50,100]`，`[100]` → `[100,100,100]`
+- `complex.json`：`[60]` → `[60,60,100]`，`[120]` → `[120,120,100]`
+
+**验证结果**：修正后 SVG 仍显示 `<g style="display: none;">` 隐藏的 path——说明 scale 维度只是部分原因，测试 JSON 仍缺少其他 lottie-web 期望的字段（如 `ix` 索引、`st`/`bm`/`ip`/`op` 属性等）。测试 JSON 为手写最小示例，难以完全合规。
+
+**基准测试排除代码嫌疑**：从 lottie-web npm tarball（5.12.2）提取官样 JSON 做基准测试：
+- `ripple_official.json`（11458 bytes）上传到 VnZ2xQ：SVG 渲染 **374 个形状元素、186 个带 `d` 属性的 path、92 个带 fill 的元素**，`svgInnerHTML_len: 81635`，**无 `display:none` 隐藏** ✅
+- `starfish_official.json`（24780 bytes）上传到 FinAgent：SVG 渲染 **16 个形状元素、6 个带 `d` 属性的 path、5 个带 fill 的元素**，`svgInnerHTML_len: 3488`，**无隐藏** ✅
+
+**结论**：
+- ✅ **项目代码 `LottieRenderer.tsx` 完全正确**——官样 JSON 渲染出丰富的可见 SVG 形状（186 个带 `d` 的 path、92 个带 fill，无 `display:none` 隐藏）
+- ❌ **测试 JSON 不合规**——手写最小示例难以完全符合 lottie-web 5.x schema（需 `ix`/`st`/`bm`/`ip`/`op` 等字段），导致形状不可见
+- **LottieRenderer 的 `loadAnimation` 调用方式正确**，`renderer: "svg"`、`loop`/`autoplay`、`animationData`、`rendererSettings.preserveAspectRatio` 均符合 lottie-web 5.x API
+
+**影响文件**：
+- `docs/DEVLOG.md`（本节）
+- 测试 JSON 文件（`/tmp/lottie_tests/simple.json` / `complex.json`）已修正，但为临时测试文件，不入库
+
+**后续建议**：测试 Lottie 头像时应使用 After Effects + Bodymovin 插件导出的合规 JSON，或直接从 lottie-web 官方 `test/animations/` 目录提取示例 JSON，避免手写不合规格式。
+
+---

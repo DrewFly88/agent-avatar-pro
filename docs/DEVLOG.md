@@ -1680,3 +1680,37 @@ agent-avatar-pro/
 | `docs/DEVLOG.md` | 追加 Phase 15 记录（本节） |
 
 ---
+
+## 第十五阶段附录：插件加载失败修复 + 端到端测试验证（2026-07-18）
+
+**任务：** 测试 Phase 15 改动后的插件端到端运行状态，修复发现的加载失败 bug。
+
+**发现：** 部署最新改动后 `qwenpaw app --port 37711` 启动日志报错：
+
+```
+ERROR Failed to load plugin 'agent-avatar-pro': non-default argument follows default argument (plugin.py, line 96)
+  File "...plugin.py", line 96
+    async def get_avatar_image(agent_id: str, size: str = "full", request: Request):
+```
+
+**根因：** Phase 15 的 P2-D1（`/image` 端点加 `ETag` + 304）引入的 Python 语法错误——`request: Request`（无默认值的位置参数）跟在 `size: str = "full"`（有默认值）之后，违反 Python 语法"位置参数不能跟在默认参数后"。
+
+**修复尝试：**
+1. 初版改 `request: Optional[Request] = None` + 空检查——`python -c "import plugin"` 通过，但实际启动报 `AttributeError: 'NoneType' object has no attribute 'headers'`，FastAPI 把 Optional Request 当响应模型字段而非请求注入
+2. 正版改参数顺序：`agent_id: str, request: Request, size: str = "full"`——无默认值参数（`request`）在前，有默认值（`size`）在后，符合 Python 语法 + FastAPI 正确识别 Request 注入
+
+**影响文件：** `plugin.py`（`get_avatar_image` 签名参数顺序调整）
+
+**端到端测试验证：**
+
+| 阶段 | 结果 | 关键证据 |
+|------|------|---------|
+| 阶段1 启动+部署 | ✅ | `Avatar service initialized`，`set_agent_avatar`/`get_agent_avatar_status` 工具注入所有 workspace |
+| 阶段2 管理面板 DOM | ✅ | React/antd 就绪，AvatarManager 表格 + AvatarUploader 渲染，URL placeholder 显示 Phase 15 改的 lottie.host 提示 |
+| 阶段2 URL Lottie 设置 + 渲染 | ✅ | 填入 `https://lottie.host/d12158de-.../VrgZppaPQ8.json` 点"URL 设置"，前端 fetch + LottieRenderer 渲染 **138 形状元素/57 带d path/27 带fill**，viewBox `0 0 480 360` |
+| 阶段3 聊天窗口 ReactNode avatar | ✅ | 切到 VnZ2xQ Agent，main 内含 viewBox `0 0 480 360` 的 Lottie SVG，`windowLottie: "object"`，CDN + fetch 在 2 秒内完成 |
+| 整体验证 | ✅ | `python -c "import plugin"` exit 0，`python tests/test_all.py` exit 0 |
+
+**核心结论：** Phase 14 的 URL Lottie + Phase 15 的改进项在真实 QwenPaw v2.0.0.post3 环境中端到端工作正常。聊天窗口 ReactNode avatar 方案（Phase 13 核心突破）持续生效。
+
+---

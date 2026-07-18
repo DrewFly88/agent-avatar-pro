@@ -93,7 +93,7 @@ async def get_avatar(agent_id: str, size: str = "full"):
 
 
 @router.get("/{agent_id}/image")
-async def get_avatar_image(agent_id: str, size: str = "full", request: Request):
+async def get_avatar_image(agent_id: str, request: Request, size: str = "full"):
     """
     获取 Agent 头像原始图片字节（供 <img src> 直接加载）。
     返回正确的 Content-Type（如 image/png），而非 JSON。

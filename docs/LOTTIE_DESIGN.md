@@ -184,8 +184,9 @@ fetchAvatar(agentId)
       → atob(data.data) → JSON.parse → 存入 lottieData 状态
       → 渲染 <LottieRenderer animationData={lottieData} />
   → data.format === 'json' && data.type === 'url'
-      → Lottie URL 头像：无法直接渲染远程 JSON 动画
-      → 回退到 /image 端点（后端返回 poster.png）
+      → fetchLottieUrlData(data.url) fetch 远程 JSON → JSON.parse → 存入 lottieData 状态
+      → 渲染 <LottieRenderer animationData={lottieData} />
+      → fetch CORS/网络失败 → 回退到 /image 端点（后端返回 poster.png）
   → 其他格式
       → 保持原有 <img> 路径不变
 ```

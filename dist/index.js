@@ -128,6 +128,17 @@ function loadLottie() {
   });
   return loadPromise;
 }
+async function fetchLottieUrlData(url) {
+  try {
+    const resp = await fetch(url, { mode: "cors" });
+    if (!resp.ok) return null;
+    const ct = resp.headers.get("content-type") || "";
+    if (!ct.includes("json") && !ct.includes("text")) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
 const host$5 = ((_a = window.QwenPaw) == null ? void 0 : _a.host) ?? {};
 const React$5 = host$5.React ?? {
   createElement: () => null,
@@ -309,7 +320,18 @@ async function updateChatAvatar(agentId) {
   let lottieData = null;
   if (check.ok && check.has_avatar) {
     if (check.type === "url" && check.url) {
-      avatarUrl = check.url;
+      if (check.format === "json") {
+        try {
+          lottieData = await fetchLottieUrlData(check.url);
+        } catch {
+          lottieData = null;
+        }
+        if (!lottieData) {
+          avatarUrl = getImageUrl(agentId);
+        }
+      } else {
+        avatarUrl = check.url;
+      }
     } else {
       try {
         const data = await fetchAvatar(agentId);
@@ -564,9 +586,17 @@ function AvatarRenderer({
           setImgSrc(getAvatarImageUrl(agentId));
           return;
         }
-        if (data.format === "json" && data.type === "url") {
-          setLottieData(null);
-          setImgSrc(getAvatarImageUrl(agentId));
+        if (data.format === "json" && data.type === "url" && data.url) {
+          fetchLottieUrlData(data.url).then((parsed) => {
+            if (cancelled) return;
+            if (parsed) {
+              setLottieData(parsed);
+              setImgSrc(null);
+            } else {
+              setLottieData(null);
+              setImgSrc(getAvatarImageUrl(agentId));
+            }
+          });
           return;
         }
         setLottieData(null);
@@ -1071,13 +1101,16 @@ function AvatarUploader({
           });
           return;
         }
-        if (data.format === "json" && data.type === "url") {
-          setCurrentAvatar({
-            hasAvatar: true,
-            format: data.format,
-            source: data.type,
-            imgSrc: getAvatarImageUrl(agentId),
-            lottieData: null
+        if (data.format === "json" && data.type === "url" && data.url) {
+          fetchLottieUrlData(data.url).then((parsed) => {
+            if (cancelled) return;
+            setCurrentAvatar({
+              hasAvatar: true,
+              format: data.format,
+              source: data.type,
+              lottieData: parsed,
+              imgSrc: parsed ? void 0 : getAvatarImageUrl(agentId)
+            });
           });
           return;
         }

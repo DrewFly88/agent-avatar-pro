@@ -11,6 +11,7 @@ const React: typeof ReactNS = host.React ?? { createElement: () => null, useStat
 
 import type { AvatarRendererProps, AvatarDataResponse } from './types';
 import { fetchAvatar, getAvatarImageUrl } from './api';
+import { fetchLottieUrlData } from './LottieLoader';
 import LottieRenderer from './LottieRenderer';
 
 const DEFAULT_SIZE = 48;
@@ -91,10 +92,20 @@ export default function AvatarRenderer({
             setImgSrc(getAvatarImageUrl(agentId));
             return;
           }
-          // URL 类型 Lottie：无法直接渲染远程 JSON 动画，回退到 /image 端点
-          if (data.format === 'json' && data.type === 'url') {
-            setLottieData(null);
-            setImgSrc(getAvatarImageUrl(agentId));
+          // URL 类型 Lottie：fetch 远程 JSON → LottieRenderer 动画渲染
+          // CORS/网络失败时降级到 /image 端点（后端返回 poster.png 静态封面）
+          if (data.format === 'json' && data.type === 'url' && data.url) {
+            fetchLottieUrlData(data.url).then((parsed) => {
+              if (cancelled) return;
+              if (parsed) {
+                setLottieData(parsed);
+                setImgSrc(null);
+              } else {
+                // fetch 失败：回退到 /image 端点（后端 poster.png）
+                setLottieData(null);
+                setImgSrc(getAvatarImageUrl(agentId));
+              }
+            });
             return;
           }
           // 其他格式保持原有 <img> 路径

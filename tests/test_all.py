@@ -153,6 +153,23 @@ async def test_security():
     result = await svc.set_avatar_url("test-ftp", "ftp://server/avatar.png")
     report("ftp:// URL 被拒绝", not result["ok"])
 
+    # ── 2.6 URL 类型 Lottie 格式识别 ──────────────────────────────
+    # URL 扩展名 .json → fmt = "json"，meta source = "url"
+    result = await svc.set_avatar_url(
+        "test-url-lottie",
+        "https://lottie.host/d12158de-44c9-4079-b980-3bf63694f918/VrgZppaPQ8.json",
+    )
+    report("URL Lottie 设置成功", result["ok"],
+           f"error={result.get('error','')}")
+    report("URL Lottie 识别格式=json", result.get("format") == "json",
+           f"实际 format={result.get('format')}")
+
+    # 验证 meta.json source 字段为 "url"（非 "file"）
+    meta_check = await svc.get_avatar("test-url-lottie")
+    report("URL Lottie meta source=url",
+           meta_check.get("source") == "url" or meta_check.get("type") == "url",
+           f"实际 type={meta_check.get('type')}, source={meta_check.get('source')}")
+
 
 # ==================================================================
 #  第三部分：格式兼容性测试

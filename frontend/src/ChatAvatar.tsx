@@ -33,6 +33,7 @@
 import { checkAvatar, fetchAgents, fetchAvatar } from './api';
 import type { AgentInfo } from './types';
 import LottieRenderer from './LottieRenderer';
+import { fetchLottieUrlData } from './LottieLoader';
 
 const PLUGIN_ID = "agent-avatar-pro";
 const AGENT_STORAGE_KEY = "qwenpaw-agent-storage";
@@ -139,7 +140,21 @@ async function updateChatAvatar(agentId: string): Promise<void> {
 
   if (check.ok && check.has_avatar) {
     if (check.type === "url" && check.url) {
-      avatarUrl = check.url;
+      // URL 头像：Lottie 格式 fetch 远程 JSON → LottieRenderer ReactNode；
+      // 其他格式直接用 URL 作为 <img> src
+      if (check.format === "json") {
+        try {
+          lottieData = await fetchLottieUrlData(check.url);
+        } catch {
+          lottieData = null;
+        }
+        // fetch 失败：lottieData 为 null，后续降级到 /image poster.png URL
+        if (!lottieData) {
+          avatarUrl = getImageUrl(agentId);
+        }
+      } else {
+        avatarUrl = check.url;
+      }
     } else {
       // 文件类型头像：通过 fetchAvatar 获取 base64 数据
       // Lottie 格式 → 解析为 JS 对象，渲染为 LottieRenderer ReactNode

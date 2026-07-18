@@ -14,6 +14,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# httpx for URL Lottie JSON download (URL 类型 Lottie 生成 poster.png 时下载远程 JSON)
+try:
+    import httpx
+except ImportError:
+    httpx = None  # 不可用时跳过 URL Lottie poster 生成，前端仍可 fetch URL 渲染动画
+
 # Pillow for image processing
 try:
     from PIL import Image
@@ -266,6 +272,12 @@ class AvatarService:
         meta_path = agent_dir / "meta.json"
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
+        # URL 类型 Lottie：下载远程 JSON 生成静态封面 poster.png，
+        # 使 /image 端点和前端 CORS/网络失败时仍能显示静态占位图
+        # 下载失败不阻塞设置（meta 已写入，前端可 fetch URL 渲染动画）
+        if fmt == "json" and httpx:
+            asyncio.create_task(self._download_and_make_lottie_poster(url, agent_dir))
+
         return {
             "ok": True,
             "agent_id": agent_id,
@@ -274,6 +286,30 @@ class AvatarService:
             "replaced": replaced,
             "previous_format": previous_format,
         }
+
+    async def _download_and_make_lottie_poster(self, url: str, agent_dir: Path) -> None:
+        """下载远程 Lottie JSON 并生成静态封面 poster.png。
+
+        用于 URL 类型 Lottie 头像，使 /image 端点对 URL Lottie 也能返回静态 PNG，
+        作为前端 fetch CORS 失败时的回退。下载/生成失败时静默跳过（不影响设置）。
+        """
+        try:
+            # 5s 超时，限制 1MB 避免恶意超大 JSON
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    return
+                # 仅接受 JSON 响应（宽松：text/plain 也接受，部分 CDN 返回此类型）
+                ct = resp.headers.get("content-type", "")
+                if "json" not in ct and "text" not in ct:
+                    return
+                data = resp.content
+                if len(data) > 1_000_000:  # 1MB 上限
+                    return
+            self._generate_lottie_poster(agent_dir, data)
+        except Exception:
+            # 网络错误/超时/JSON 格式异常：静默跳过，前端仍可 fetch URL 渲染
+            pass
 
     # ── Get Avatar ────────────────────────────────────────────────
 
@@ -345,15 +381,16 @@ class AvatarService:
 
         meta = json.loads(meta_path.read_text())
 
-        # URL-based avatar: 不下载，返回 None（前端应直接使用 meta["url"]）
-        if meta.get("source") == "url":
-            return None
-
         # Lottie 格式：返回静态封面 poster.png（浏览器无法渲染原始 JSON）
+        # URL 类型 Lottie 也能返回 poster.png（set_avatar_url 时 _download_and_make_lottie_poster 生成）
         if meta.get("format") == "json":
             poster_path = agent_dir / "poster.png"
             if poster_path.exists():
                 return poster_path.read_bytes(), "image/png"
+            return None
+
+        # URL-based avatar（非 Lottie）：不下载，返回 None（前端应直接使用 meta["url"]）
+        if meta.get("source") == "url":
             return None
 
         filename = meta.get("filename", "avatar.png")

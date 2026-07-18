@@ -21,6 +21,7 @@ import type { AvatarUploaderProps, AvatarUploadResponse } from "./types";
 import { uploadAvatar, setAvatarUrl, checkAvatar, fetchAvatar, getAvatarImageUrl } from "./api";
 import CropModal, { shouldSkipCrop } from "./CropModal";
 import { refreshCurrentAvatar } from "./ChatAvatar";
+import { fetchLottieUrlData } from "./LottieLoader";
 import LottieRenderer from "./LottieRenderer";
 
 const ACCEPT_DEFAULT = ".png,.jpg,.jpeg,.gif,.webp,.svg,.apng,.json";
@@ -88,14 +89,18 @@ export default function AvatarUploader({
             });
             return;
           }
-          // URL 类型 Lottie：回退到 /image 端点（后端返回 poster.png）
-          if (data.format === "json" && data.type === "url") {
-            setCurrentAvatar({
-              hasAvatar: true,
-              format: data.format,
-              source: data.type,
-              imgSrc: getAvatarImageUrl(agentId),
-              lottieData: null,
+          // URL 类型 Lottie：fetch 远程 JSON → LottieRenderer 预览
+          // CORS/网络失败时降级到 /image 端点（后端返回 poster.png）
+          if (data.format === "json" && data.type === "url" && data.url) {
+            fetchLottieUrlData(data.url).then((parsed) => {
+              if (cancelled) return;
+              setCurrentAvatar({
+                hasAvatar: true,
+                format: data.format,
+                source: data.type,
+                lottieData: parsed,
+                imgSrc: parsed ? undefined : getAvatarImageUrl(agentId),
+              });
             });
             return;
           }

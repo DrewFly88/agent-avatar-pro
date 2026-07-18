@@ -66,3 +66,34 @@ export function loadLottie(): Promise<any> {
 export function isLottieLoaded(): boolean {
   return !!(window as any).lottie;
 }
+
+/**
+ * 从远程 URL fetch Lottie JSON 并解析为 JS 对象。
+ *
+ * 用于 URL 类型 Lottie 头像（如 https://lottie.host/xxx/anim.json），
+ * 让前端直接渲染远程 JSON 动画，无需后端代理下载。
+ *
+ * 行为：
+ * - fetch 失败（网络/CORS/404）→ 返回 null，由调用方降级到后端 poster.png
+ * - 响应非 JSON / JSON.parse 失败 → 返回 null
+ * - 成功 → 返回解析后的 JS 对象
+ *
+ * CORS 考量：lottie.host 等 CDN 通常含 `Access-Control-Allow-Origin: *` 响应头，
+ * 若 CORS 拒绝则 fetch 抛异常被 catch 捕获，降级到 poster.png URL 静态封面。
+ *
+ * @param url Lottie JSON 的 HTTPS URL
+ * @returns 解析后的 JS 对象，或 null（失败时）
+ */
+export async function fetchLottieUrlData(url: string): Promise<unknown | null> {
+  try {
+    const resp = await fetch(url, { mode: "cors" });
+    if (!resp.ok) return null;
+    // Content-Type 校验（宽松：部分 CDN 返回 text/plain 而非 application/json）
+    const ct = resp.headers.get("content-type") || "";
+    if (!ct.includes("json") && !ct.includes("text")) return null;
+    return await resp.json();
+  } catch {
+    // 网络错误 / CORS 拒绝 / JSON 解析失败
+    return null;
+  }
+}

@@ -1502,3 +1502,60 @@ agent-avatar-pro/
 **后续建议**：测试 Lottie 头像时应使用 After Effects + Bodymovin 插件导出的合规 JSON，或直接从 lottie-web 官方 `test/animations/` 目录提取示例 JSON，避免手写不合规格式。
 
 ---
+
+## 第十四阶段：URL 类型 Lottie 头像支持（2026-07-18）
+
+**任务：** 支持通过 URL 设置 Lottie 头像（如 `https://lottie.host/d12158de-44c9-4079-b980-3bf63694f918/VrgZppaPQ8.json`），前端直接 fetch 远程 JSON 渲染动画，辅以后端下载生成 poster.png 作为 CORS/网络失败时的静态回退。
+
+**背景：** Phase 13 实现了文件类型 Lottie 渲染，但 URL 类型 Lottie 在前端三处分支（AvatarRenderer/Uploader/ChatAvatar）均直接回退到 `/image` 端点——而 `/image` 对 URL 头像返回 302 重定向到原始 JSON URL，`<img>` 标签无法渲染 JSON，导致气泡头像和预览空白。
+
+**完成内容：**
+
+### Phase A — 前端 fetch URL Lottie JSON 渲染
+
+- **新增 `fetchLottieUrlData(url)` 辅助**（`frontend/src/LottieLoader.ts`）：
+  - `fetch(url, {mode:"cors"})` → `resp.json()` → 返回解析后的 JS 对象
+  - CORS 拒绝/网络错误/非 JSON/解析失败 → 返回 `null`（由调用方降级到后端 poster.png URL）
+  - Content-Type 校验宽松（接受 `application/json` 和 `text/plain`，部分 CDN 返回后者）
+- **修改 `AvatarRenderer.tsx`**：`format === "json" && type === "url"` 分支调用 `fetchLottieUrlData(data.url)` → `setLottieData` → LottieRenderer 渲染；fetch 失败回退到 `/image` 端点
+- **修改 `AvatarUploader.tsx`**：预览区域同上改造，URL 类型 Lottie 预览用 LottieRenderer 替代 `<img>`
+- **修改 `ChatAvatar.tsx`**：`updateChatAvatar()` 中 `check.type === "url" && check.format === "json"` 分支 `fetchLottieUrlData(check.url)` → 构造 LottieRenderer ReactNode 传入 `chat.welcome.set`；fetch 失败降级到 `getImageUrl()`（后端 poster.png）
+
+### Phase B — 后端为 URL 类型 Lottie 生成 poster.png
+
+- **修改 `avatar_service.py`**：
+  - 新增 `import httpx`（try-except 容错，不可用时跳过 URL Lottie poster 生成，前端仍可 fetch 渲染）
+  - `set_avatar_url()` 中 `fmt == "json" && httpx` 时 `asyncio.create_task(self._download_and_make_lottie_poster(url, agent_dir))` 异步下载生成 poster.png，不阻塞设置响应
+  - 新增 `_download_and_make_lottie_poster()` 异步方法：5s 超时 + 1MB 上限 + Content-Type 校验，下载后调用现有 `_generate_lottie_poster()` 生成静态封面
+  - `get_avatar_image()` 逻辑顺序调整：`format === "json"` 分支优先于 `source === "url"` 的 None return，使 URL 类型 Lottie 也能返回 poster.png
+
+### Phase C — 测试与文档
+
+- **后端测试**：`tests/test_all.py` 新增 URL 类型 Lottie 格式识别测试（设置 `lottie.host` URL → 验证 `format: "json"`、`type/source: "url"`），51 + 3 项全部通过（exit 0）
+- **前端构建**：`npm run build` 成功，bundle 52.49KB（gzip 13.54KB），相比 Phase 13 的 51.49KB 增加 ~1KB（fetchLottieUrlData 辅助 + 三处分支改造）
+- **实测验证**：通过后端 API 设置真实 `https://lottie.host/d12158de-.../VrgZppaPQ8.json` 到 KBByTo，管理面板 SVG 渲染 **138 个形状元素、57 个带 d 属性的 path、27 个带 fill 的元素**，`componentType: "LottieRenderer < AvatarRenderer < ..."`，前端 fetch URL JSON 路径正确生效
+- **文档更新**：
+  - `docs/LOTTIE_DESIGN.md`：URL 类型 Lottie 分支从"回退到 /image"改为"fetch 远程 JSON → LottieRenderer → CORS 失败回退 poster.png"
+  - `docs/DEVLOG.md`：追加 Phase 14 记录（本节）
+
+**关键设计考量：**
+
+1. **CORS 跨域**：`lottie.host` 等 CDN 通常含 `Access-Control-Allow-Origin: *` 响应头，前端 `fetch(url, {mode:"cors"})` 可直接读取 JSON。若 CORS 拒绝，前端 catch 降级到后端 poster.png URL 静态封面。
+2. **后端异步下载**：`set_avatar_url()` 用 `asyncio.create_task()` 异步下载生成 poster，不阻塞设置响应——用户设置 URL Lottie 后立即返回成功，poster.png 在后台生成。下载失败时静默跳过（meta 已写入，前端可 fetch URL 渲染动画）。
+3. **安全**：复用现有 HTTPS 白名单（`ALLOWED_URL_PROTOCOLS`），httpx 下载限制 5s 超时 + 1MB 上限，避免恶意 URL 拖慢服务或 OOM。
+4. **缓存**：URL 类型 Lottie 不本地缓存 JSON——前端每次 fetch（浏览器 CDN 缓存），后端只在设置时下载一次生成 poster。
+
+**影响文件：**
+
+| 文件 | 操作 |
+|------|------|
+| `frontend/src/LottieLoader.ts` | 新增 `fetchLottieUrlData` 辅助 |
+| `frontend/src/AvatarRenderer.tsx` | 修改 URL 类型 Lottie 分支 |
+| `frontend/src/AvatarUploader.tsx` | 修改 URL 类型 Lottie 分支 |
+| `frontend/src/ChatAvatar.tsx` | 修改 URL 类型 Lottie 分支 |
+| `avatar_service.py` | 新增 httpx import + `_download_and_make_lottie_poster` + `set_avatar_url` 下载 + `get_avatar_image` 逻辑顺序 |
+| `tests/test_all.py` | 新增 URL 类型 Lottie 测试 |
+| `docs/LOTTIE_DESIGN.md` | 更新 URL 类型 Lottie 分支描述 |
+| `docs/DEVLOG.md` | 追加 Phase 14 记录（本节） |
+
+---

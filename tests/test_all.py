@@ -208,6 +208,113 @@ async def test_formats():
     report("APNG 检测为 apng（非 png）", result.get("format") == "apng",
            f"got={result.get('format')}")
 
+    # ── animated WebP 检测 ───────────────────────────────────────
+    webp_animated = _make_minimal_animated_webp()
+    result = await svc.upload_avatar("test-webp-anim", webp_animated)
+    report("animated WebP 上传成功", result["ok"],
+           f"error={result.get('error','')}")
+    report("animated WebP 检测格式=webp", result.get("format") == "webp",
+           f"got={result.get('format')}")
+    # 普通静态 WebP 也应识别为 webp
+    webp_static = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 10
+    result = await svc.upload_avatar("test-webp-static", webp_static)
+    report("static WebP 检测格式=webp", result.get("format") == "webp",
+           f"got={result.get('format')}")
+
+    # ── delete_avatar 删除测试 ──────────────────────────────────
+    # 先确认 test-png 存在，删除后应不可获取
+    get_before = await svc.get_avatar("test-png")
+    report("delete 前头像可获取", get_before["ok"])
+    del_result = await svc.delete_avatar("test-png")
+    report("delete_avatar 返回 ok", del_result["ok"])
+    get_after = await svc.get_avatar("test-png")
+    report("delete 后头像不可获取", not get_after["ok"])
+    report("delete 后 has_avatar=False", not svc.has_avatar("test-png"))
+
+    # ── list_avatars 列表测试 ───────────────────────────────────
+    # 此时应剩 test-jpg/jpeg/gif/webp/svg/json/apng/webp-anim/webp-static
+    list_result = await svc.list_avatars()
+    report("list_avatars 返回 ok", list_result["ok"])
+    report("list_avatars count>0", list_result.get("count", 0) > 0,
+           f"count={list_result.get('count')}")
+    # 验证列表项含必要字段
+    if list_result.get("avatars"):
+        first = list_result["avatars"][0]
+        report("list 项含 agent_id", "agent_id" in first)
+        report("list 项含 format", "format" in first)
+        report("list 项含 source", "source" in first)
+
+    # ── _sanitize_svg XSS 清洗测试 ──────────────────────────────
+    # 含 script 标签、onerror 属性、javascript: URL 的恶意 SVG
+    evil_svg = (
+        b'<svg xmlns="http://www.w3.org/2000/svg" '
+        b'onload="alert(1)" width="100" height="100">'
+        b'<script>alert("xss")</script>'
+        b'<a xlink:href="javascript:alert(2)"><rect/></a>'
+        b'</svg>'
+    )
+    result = await svc.upload_avatar("test-evil-svg", evil_svg)
+    report("恶意 SVG 上传成功", result["ok"])
+    # 重新获取存储的文件内容，验证清洗后无危险内容
+    if result["ok"]:
+        evil_agent_dir = svc._data_dir / "test-evil-svg"
+        stored_svg = (evil_agent_dir / "avatar.svg").read_bytes().decode("utf-8", errors="replace")
+        report("SVG 清洗后无 <script>", "<script" not in stored_svg.lower(),
+               f"stored_head={stored_svg[:120]}")
+        report("SVG 清洗后无 onload=", "onload=" not in stored_svg.lower())
+        report("SVG 清洗后无 javascript:", "javascript:" not in stored_svg.lower())
+
+    # ── get_avatar size="thumb" 缩略图分支测试 ─────────────────────
+    # test-jpg 上传时生成了 thumbnail.jpg，请求 thumb 应返回缩略图
+    thumb_result = await svc.get_avatar("test-jpg", size="thumb")
+    report("get_avatar size=thumb 返回 ok", thumb_result["ok"],
+           f"error={thumb_result.get('error','')}")
+    report("get_avatar size=thumb type=file", thumb_result.get("type") == "file")
+    report("get_avatar size=thumb 有 base64 数据", bool(thumb_result.get("data")),
+           "data 为空")
+
+    # ── history 截断到 1 条边界测试 ────────────────────────────────
+    # 连续替换同一 Agent 3 次，history 应只保留最近 1 条
+    for i in range(3):
+        await svc.upload_avatar("test-history-agent",
+                                _make_minimal_png())
+    # 第三次上传后，meta.history 应仅 1 条（截断逻辑）
+    agent_dir = svc._data_dir / "test-history-agent"
+    meta = json.loads((agent_dir / "meta.json").read_text())
+    history = meta.get("history", [])
+    report("history 截断到 1 条", len(history) == 1,
+           f"实际 history 长度={len(history)}")
+
+    # ── Lottie poster.png 生成测试 ────────────────────────────────
+    # 上传合规 Lottie JSON，应生成 poster.png 静态封面
+    lottie_data = b'{"v":"5.9.0","fr":60,"ip":0,"op":30,"w":200,"h":200,"nm":"test","ddd":0,"assets":[],"layers":[]}'
+    result = await svc.upload_avatar("test-lottie-poster", lottie_data)
+    report("Lottie JSON 上传成功", result["ok"],
+           f"error={result.get('error','')}")
+    report("Lottie 检测格式=json", result.get("format") == "json",
+           f"got={result.get('format')}")
+    # 验证 poster.png 已生成（Pillow 可用时）
+    if Image:
+        poster_path = svc._data_dir / "test-lottie-poster" / "poster.png"
+        report("Lottie 生成 poster.png", poster_path.exists(),
+               f"path={poster_path}")
+        # 验证 poster.png 尺寸与 JSON w/h 一致
+        if poster_path.exists():
+            try:
+                poster_img = Image.open(poster_path)
+                report("poster.png 尺寸=200x200",
+                       poster_img.size == (200, 200),
+                       f"实际尺寸={poster_img.size}")
+            except Exception as e:
+                report("poster.png 可读", False, f"error={e}")
+    # get_avatar_image 对 Lottie 返回 poster.png（而非原始 JSON）
+    img_result = await svc.get_avatar_image("test-lottie-poster")
+    report("get_avatar_image 对 Lottie 返回字节", img_result is not None)
+    if img_result:
+        report("Lottie /image 返回 mime=image/png",
+               "image/png" in img_result[1] or "png" in img_result[1].lower(),
+               f"mime={img_result[1]}")
+
 
 # ==================================================================
 #  第四部分：单例访问器测试
@@ -263,6 +370,20 @@ def _make_minimal_apng():
     idat = chunk(b"IDAT", raw)
     iend = chunk(b"IEND", b"")
     return sig + ihdr + actl + idat + iend
+
+
+def _make_minimal_animated_webp():
+    """生成含 VP8X 扩展块且动画标志位设置的 WebP 字节流。
+
+    WebP 容器结构：RIFF [size] WEBP VP8X [chunk_size] [flags] ...
+    flags 字节 bit 1 (0x02) = animation。仅需前 30 字节即可触发检测。
+    """
+    import struct
+    # RIFF [size=0] WEBP
+    riff = b"RIFF" + struct.pack("<I", 0) + b"WEBP"
+    # VP8X chunk: signature + [chunk_size=10] + flags(0x02=anim) + reserved(0)
+    vp8x = b"VP8X" + struct.pack("<I", 10) + b"\x02" + b"\x00" * 9
+    return riff + vp8x + b"\x00" * 8  # padding to >=30 bytes
 
 
 # ==================================================================

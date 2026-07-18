@@ -60,6 +60,22 @@ export function loadLottie(): Promise<any> {
 }
 
 /**
+ * 将 base64 编码的 Lottie JSON 解码为 JS 对象。
+ * atob() 解码 base64 为 ASCII 字符串（Lottie JSON 是纯 ASCII 文本，安全可用）。
+ * 失败时返回 null，由调用方回退到 FallbackIcon 或 poster.png。
+ *
+ * 用于替代 AvatarRenderer/Uploader/ChatAvatar 中各自的重复实现。
+ */
+export function decodeLottieData(b64: string): unknown | null {
+  try {
+    const jsonStr = atob(b64);
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 查询当前加载状态（不触发加载）。
  * @returns true 如果 window.lottie 已存在
  */

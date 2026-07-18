@@ -15,14 +15,7 @@
 
 import type * as ReactNS from "react";
 import { loadLottie } from "./LottieLoader";
-
-const host = window.QwenPaw?.host ?? ({} as any);
-const React: typeof ReactNS = host.React ?? {
-  createElement: () => null,
-  useRef: (() => ({ current: null })) as any,
-  useState: (() => [null, () => {}]) as any,
-  useEffect: () => {},
-};
+import { host, React } from "./qwenpaw-host";
 
 export interface LottieRendererProps {
   /** Lottie JSON 动画数据（已解析的对象，非 base64 字符串） */

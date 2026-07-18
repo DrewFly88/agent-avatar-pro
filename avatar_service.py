@@ -292,7 +292,13 @@ class AvatarService:
 
         用于 URL 类型 Lottie 头像，使 /image 端点对 URL Lottie 也能返回静态 PNG，
         作为前端 fetch CORS 失败时的回退。下载/生成失败时静默跳过（不影响设置）。
+
+        SSRF 防护：下载前调用 _is_ssrf_url 拦截内网/保留地址，
+        避免 HTTPS URL 指向内网服务（如 https://10.0.0.1）触发服务端请求伪造。
         """
+        # SSRF 拦截：内网/保留地址直接拒绝，不发起请求
+        if self._is_ssrf_url(url):
+            return
         try:
             # 5s 超时，限制 1MB 避免恶意超大 JSON
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -310,6 +316,65 @@ class AvatarService:
         except Exception:
             # 网络错误/超时/JSON 格式异常：静默跳过，前端仍可 fetch URL 渲染
             pass
+
+    @staticmethod
+    def _is_ssrf_url(url: str) -> bool:
+        """检测 URL 是否指向内网/保留地址（SSRF 防护）。
+
+        解析 URL hostname，对域名做 DNS 解析，对结果 IP 检查：
+        - 私有网段（10/8、172.16/12、192.168/16）
+        - 链路本地（169.254/16，含 AWS metadata 169.254.169.254）
+        - 回环（127/8）、未指定（0/8）、广播/组播
+        - IPv6 ::1 / fe80:: / fc00::/7 (ULA)
+
+        解析失败（无网络/DNS 拒绝）时保守判定为 SSRF（拒绝下载）。
+        """
+        import ipaddress
+        import socket
+        from urllib.parse import urlparse
+
+        try:
+            host = urlparse(url).hostname
+            if not host:
+                return True  # 无 hostname 视为可疑
+            # 先尝试直接当 IP 解析（host 本身就是 IP 字面量）
+            try:
+                addr = ipaddress.ip_address(host)
+            except ValueError:
+                # 域名：做 DNS 解析（同步 socket，超时 2s）
+                try:
+                    resolved = socket.getaddrinfo(
+                        host, None,
+                        family=socket.AF_UNSPEC,
+                        type=socket.SOCK_STREAM,
+                        proto=socket.IPPROTO_TCP,
+                        flags=socket.AI_NUMERICHOST,
+                    )
+                except (socket.gaierror, socket.herror):
+                    return True  # DNS 解析失败：保守拒绝
+                # 取所有解析到的 IP 检查
+                addr_ips = []
+                for family, _, _, _, sockaddr in resolved:
+                    try:
+                        addr_ips.append(ipaddress.ip_address(sockaddr[0]))
+                    except (ValueError, IndexError):
+                        continue
+                if not addr_ips:
+                    return True
+                # 任一解析 IP 落内网即拒绝
+                return any(
+                    addr.is_private or addr.is_loopback or addr.is_link_local
+                    or addr.is_unspecified or addr.is_multicast or addr.is_reserved
+                    for addr in addr_ips
+                )
+            # host 本身是 IP 字面量：直接检查
+            return (
+                addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_unspecified or addr.is_multicast or addr.is_reserved
+            )
+        except Exception:
+            # 任何意外：保守判定为 SSRF（拒绝下载）
+            return True
 
     # ── Get Avatar ────────────────────────────────────────────────
 
@@ -556,13 +621,49 @@ class AvatarService:
 
     @staticmethod
     def _sanitize_svg(data: bytes) -> bytes:
-        """清洗 SVG 中的潜在 XSS 内容。"""
-        text = data.decode("utf-8", errors="replace")
-        # Remove dangerous tags and attributes
+        """清洗 SVG 中的潜在 XSS 内容。
+
+        覆盖向量：
+        - `<script>` / `<foreignObject>` 标签整段移除（foreignObject 可嵌入 HTML/JS）
+        - `on*` 事件属性（支持引号、未引号、反引号包裹）
+        - `javascript:` URL（含未引号包裹）
+        - `style` 属性中的 `expression()` / `url(javascript:...)`（IE 老旧向量）
+        - SVG 尺寸上限（width/height > 4096 视为恶意，裁剪到 256）
+
+        保守策略：宁可误杀部分合法属性，也要确保剥离所有已知 XSS 向量。
+        """
         import re
+        text = data.decode("utf-8", errors="replace")
+
+        # 1. 移除 <script> 和 <foreignObject> 整段（含内容）
         text = re.sub(r"<script[\s\S]*?</script>", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\bon\w+\s*=\s*['\"][^'\"]*['\"]", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"<foreignObject[\s\S]*?</foreignObject>", "", text, flags=re.IGNORECASE)
+
+        # 2. 移除 on* 事件属性（支持单引号/双引号/反引号/未引号包裹）
+        # 未引号：onload=alert(1) → 需匹配到空白或 > 结束
+        text = re.sub(r"\bon\w+\s*=\s*['\"\`][^'\"\`]*['\"\`]", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bon\w+\s*=\s*[^\s>]+", "", text, flags=re.IGNORECASE)
+
+        # 3. 移除 javascript: URL（含未引号包裹）
         text = re.sub(r"javascript\s*:", "", text, flags=re.IGNORECASE)
+
+        # 4. 移除 style 属性中的 expression() / url(javascript:...)（IE 老旧向量）
+        # 先剥 style 属性整段（保守策略，避免误判半边匹配）
+        text = re.sub(r"\bstyle\s*=\s*['\"\`][^'\"\`]*['\"\`]", "", text, flags=re.IGNORECASE)
+        # 再兜底剥残留的 expression() / url(javascript:)
+        text = re.sub(r"expression\s*\(", "", text, flags=re.IGNORECASE)
+
+        # 5. SVG 尺寸上限：width/height > 4096 视为恶意，裁剪到 256（避免 Pillow 解码 OOM）
+        def _cap_size(m):
+            try:
+                val = int(m.group(2))
+                return f"{m.group(1)}={256 if val > 4096 else val}"
+            except (ValueError, IndexError):
+                return m.group(0)
+
+        # 匹配 width="1234" / height="1234"（支持单/双/未引号）
+        text = re.sub(r"\b(width|height)\s*=\s*['\"\`]?\d+['\"\`]?", _cap_size, text, flags=re.IGNORECASE)
+
         return text.encode("utf-8")
 
     @staticmethod

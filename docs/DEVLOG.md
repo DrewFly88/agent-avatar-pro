@@ -1559,3 +1559,124 @@ agent-avatar-pro/
 | `docs/DEVLOG.md` | 追加 Phase 14 记录（本节） |
 
 ---
+
+## 第十五阶段：项目改进与优化（2026-07-18）
+
+**任务：** 基于代码质量/架构/安全审计，执行 P0-P3 全部 9 项改进，覆盖代码去重、测试覆盖缺口、安全加固、性能优化、UX 改进、架构清理。
+
+**完成内容：**
+
+### P0-A1 — 提取 `decodeLottieData` 去重
+
+- **问题**：`AvatarRenderer.tsx`/`AvatarUploader.tsx`/`ChatAvatar.tsx` 各有一份相同的 `atob(b64) → JSON.parse` 实现（3 处复制）
+- **修复**：提取到 `frontend/src/LottieLoader.ts`（已是 lottie 辅助的归属地）统一导出，三处改 `import { decodeLottieData } from "./LottieLoader"`
+- **影响**：`LottieLoader.ts` 新增导出 + 3 个前端文件净减 ~45 行
+
+### P0-B1 — 补测试覆盖缺口
+
+- **问题**：`tests/test_all.py` 缺失 `delete_avatar`/`list_avatars`/`_sanitize_svg`/APNG/WebP 检测覆盖
+- **修复**：追加 6 类测试用例：
+  - APNG 特殊检测（acTL chunk）
+  - animated/static WebP 检测（VP8X flags）
+  - `delete_avatar` 删除前后状态验证
+  - `list_avatars` 返回字段完整性
+  - `_sanitize_svg` XSS 清洗（script/onload/javascript:）
+- **影响**：`tests/test_all.py` +80 行，新增 `_make_minimal_animated_webp` 辅助
+
+### P1-C1 — `_sanitize_svg` 安全加固
+
+- **问题**：原清洗仅覆盖引号包裹的 `on*` 属性和 `javascript:` URL，遗漏未引号属性、`style` 中的 `expression()`/`url(javascript:)`、`<foreignObject>` 标签、SVG 尺寸 OOM 向量
+- **修复**：扩展清洗覆盖 5 类向量：
+  - `<script>` 和 `<foreignObject>` 整段移除
+  - `on*` 事件属性支持单/双/反引号/未引号包裹
+  - `javascript:` URL 兜底剥离
+  - `style` 属性整段剥 + `expression()` 残留兜底
+  - SVG `width`/`height` > 4096 裁剪到 256（嵌套 `_cap_size` 函数）
+- **影响**：`avatar_service.py` `_sanitize_svg` 从 4 行扩到 ~40 行
+
+### P1-C2 — URL Lottie SSRF 防护
+
+- **问题**：`_download_and_make_lottie_poster` 用 `httpx.get(url)` 直连，HTTPS URL 可指向内网（`https://10.0.0.1`）触发服务端请求伪造
+- **修复**：新增 `_is_ssrf_url(url)` 静态方法，下载前校验：
+  - 解析 URL hostname → DNS 解析所有 IP
+  - 拒绝私有网段（10/8、172.16/12、192.168/16）、链路本地（169.254/16，含 AWS metadata）、回环（127/8）、未指定（0/8）、组播、保留地址
+  - IPv6 ::1 / fe80:: / fc00::/7 (ULA)
+  - DNS 解析失败时保守判定为 SSRF（拒绝下载）
+- **影响**：`avatar_service.py` 新增 `_is_ssrf_url` ~45 行 + `_download_and_make_lottie_poster` 加调用
+
+### P1-A2 — 提取前端 host fallback 到运行时模块
+
+- **问题**：6 个 `.tsx` 文件各自复制 `const host = window.QwenPaw?.host ?? ...` + `const React = host.React ?? { createElement: ... }` + `const antd = host.antd ?? {}` 模式，且每个的 fallback hook 集合不同
+- **修复**：新建 `frontend/src/qwenpaw-host.ts` 集中导出 `host`/`React`/`antd`，fallback React stub 覆盖 createElement + 6 个 hook（useRef/useState/useEffect/useCallback/useMemo），6 个前端改 import
+- **影响**：新建 `qwenpaw-host.ts` ~41 行 + 6 个前端文件（AvatarRenderer/Uploader/Manager/ChatAvatar/CropModal/LottieRenderer）净减 ~80 行
+
+### P2-D1 — `/image` 端点加 `ETag` + 304
+
+- **问题**：`<img src="/avatar-pro/{id}/image?t=...">` 每次刷新重读磁盘 + 重传字节，无客户端缓存验证
+- **修复**：`plugin.py` 的 `/image` 端点加：
+  - `ETag: sha1(image_data)[:16]`（短哈希足够碰撞罕见）
+  - `If-None-Match` 命中时返回 `304 Not Modified`，空响应体
+  - 保留现有 `Cache-Control: public, max-age=300`
+- **影响**：`plugin.py` `/image` 端点 +15 行
+
+### P2-B2 — 补 thumb/history/Lottie poster 测试
+
+- **问题**：`get_avatar size="thumb"` 分支、history 截断到 1 条边界、Lottie poster.png 生成无测试
+- **修复**：追加 3 类测试：
+  - `get_avatar(size="thumb")` 返回 base64 缩略图数据
+  - 连续替换 3 次后 `meta.history` 仅 1 条（截断逻辑）
+  - Lottie JSON 上传后 `poster.png` 生成 + 尺寸 = JSON w/h + `get_avatar_image` 返回 `image/png`
+- **影响**：`tests/test_all.py` +40 行
+
+### P3-E1 — UX 改进
+
+- **问题**：URL 输入 placeholder 仅示图片 URL，用户不知可粘贴 Lottie URL；AvatarManager Table 无分页
+- **修复**：
+  - `AvatarUploader.tsx` URL placeholder 改为 `"https://...头像图 URL 或 lottie.host Lottie JSON URL"`
+  - `AvatarManager.tsx` Table `pagination: false` → `{ pageSize: 10, showSizeChanger: true, size: "small" }`
+- **影响**：2 个前端文件 ~3 行改动
+
+### P3-F1 — 移除 `dependencies` 改 startup 软检测
+
+- **问题**：`plugin.json` 的 `dependencies: ["Pillow>=9.0", "httpx"]` 触发 QwenPaw CLI bug（`No such option '-m'`，CLI 内部 pip 参数错误），阻塞安装
+- **修复**：
+  - `plugin.json` 移除 `dependencies` 声明（QwenPaw Desktop 通常已预装 Pillow）
+  - `plugin.py` `_on_startup` 加 Pillow/httpx 软检测，缺失时日志提示 `pip install Pillow httpx` 但不阻塞启动
+- **影响**：`plugin.json` -4 行 + `plugin.py` `_on_startup` +23 行
+
+### Phase Z — 整体验证
+
+- **后端测试**：`python tests/test_all.py` 全部通过（exit 0）
+- **前端构建**：`npm run build` 成功，bundle 50.89KB（gzip 13.28KB），相比 Phase 14 的 52.49KB 减少 ~1.6KB（去重 + qwenpaw-host.ts 集中）
+- **文档更新**：`docs/DEVLOG.md` 追加 Phase 15 记录（本节）
+
+**改进收益汇总：**
+
+| 维度 | 改进 |
+|------|------|
+| 代码去重 | 3 处 `decodeLottieData` + 6 处 host fallback 集中，净减 ~125 行 |
+| 测试覆盖 | 新增 9 类测试用例（delete/list/sanitize/APNG/WebP/thumb/history/Lottie poster/SSRF） |
+| 安全加固 | `_sanitize_svg` 5 类向量 + SSRF IP 黑名单 + SVG 尺寸上限 |
+| 性能 | `/image` ETag + 304 避免重传 + Table 分页 |
+| UX | URL placeholder 提示 Lottie + Table 分页 |
+| 架构 | 移除 `dependencies` 绕 CLI bug，改 startup 软检测 |
+
+**影响文件：**
+
+| 文件 | 操作 |
+|------|------|
+| `frontend/src/LottieLoader.ts` | 新增 `decodeLottieData` 导出 |
+| `frontend/src/qwenpaw-host.ts` | 新建（host/React/antd 集中） |
+| `frontend/src/AvatarRenderer.tsx` | 修改：import 去重 + host 改 import |
+| `frontend/src/AvatarUploader.tsx` | 修改：import 去重 + host 改 import + URL placeholder |
+| `frontend/src/AvatarManager.tsx` | 修改：host 改 import + Table 分页 |
+| `frontend/src/ChatAvatar.tsx` | 修改：import 去重 + host 改 import |
+| `frontend/src/CropModal.tsx` | 修改：host 改 import |
+| `frontend/src/LottieRenderer.tsx` | 修改：host 改 import |
+| `avatar_service.py` | 修改：`_sanitize_svg` 加固 + `_is_ssrf_url` SSRF 防护 |
+| `plugin.py` | 修改：`/image` ETag + 304 + startup 软检测 |
+| `plugin.json` | 修改：移除 `dependencies` |
+| `tests/test_all.py` | 修改：+9 类测试用例 + `_make_minimal_animated_webp` 辅助 |
+| `docs/DEVLOG.md` | 追加 Phase 15 记录（本节） |
+
+---

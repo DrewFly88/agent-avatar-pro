@@ -33,28 +33,11 @@
 import { checkAvatar, fetchAgents, fetchAvatar } from './api';
 import type { AgentInfo } from './types';
 import LottieRenderer from './LottieRenderer';
-import { fetchLottieUrlData } from './LottieLoader';
+import { fetchLottieUrlData, decodeLottieData } from './LottieLoader';
+import { host, React } from "./qwenpaw-host";
 
 const PLUGIN_ID = "agent-avatar-pro";
 const AGENT_STORAGE_KEY = "qwenpaw-agent-storage";
-
-/**
- * 将 base64 编码的 Lottie JSON 解码为 JS 对象。
- * atob() 解码 base64 为 ASCII 字符串（Lottie JSON 是纯 ASCII 文本，安全可用）。
- * 失败时返回 null，由调用方回退到 poster.png URL。
- */
-function decodeLottieData(b64: string): unknown | null {
-  try {
-    const jsonStr = atob(b64);
-    return JSON.parse(jsonStr);
-  } catch {
-    return null;
-  }
-}
-
-// ── Host SDK 获取 ────────────────────────────────────────────────
-const host = window.QwenPaw?.host ?? {} as any;
-const React: any = host.React ?? { createElement: () => null, useRef: (() => ({ current: null })) as any };
 
 // ── Agent 名称缓存 ──────────────────────────────────────────────
 let agentNameCache: Map<string, string> = new Map();

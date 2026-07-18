@@ -15,16 +15,7 @@
  */
 
 import type * as ReactNS from "react";
-
-const host = window.QwenPaw?.host ?? {} as any;
-const React: typeof ReactNS = host.React ?? {
-  createElement: () => null,
-  useState: (() => [null, () => {}]) as any,
-  useRef: (() => ({ current: null })) as any,
-  useCallback: ((fn: any) => fn) as any,
-  useEffect: (() => {}) as any,
-};
-const antd = host.antd ?? {};
+import { host, React, antd } from "./qwenpaw-host";
 const { Modal, Slider, Space, Button, Typography } = antd as any;
 const { Text } = (Typography ?? {}) as any;
 

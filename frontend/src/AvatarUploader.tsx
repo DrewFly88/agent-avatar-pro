@@ -6,39 +6,17 @@
  */
 
 import type * as ReactNS from "react";
-
-const host = window.QwenPaw?.host ?? {} as any;
-const React: typeof ReactNS = host.React ?? {
-  createElement: () => null,
-  useState: (() => [null, () => {}]) as any,
-  useEffect: () => {},
-  useCallback: ((fn: any) => fn) as any,
-};
-const antd = host.antd ?? {};
+import { host, React, antd } from "./qwenpaw-host";
 const { Upload, Input, Button, Space, message, Modal } = antd as any;
 
 import type { AvatarUploaderProps, AvatarUploadResponse } from "./types";
 import { uploadAvatar, setAvatarUrl, checkAvatar, fetchAvatar, getAvatarImageUrl } from "./api";
 import CropModal, { shouldSkipCrop } from "./CropModal";
 import { refreshCurrentAvatar } from "./ChatAvatar";
-import { fetchLottieUrlData } from "./LottieLoader";
+import { fetchLottieUrlData, decodeLottieData } from "./LottieLoader";
 import LottieRenderer from "./LottieRenderer";
 
 const ACCEPT_DEFAULT = ".png,.jpg,.jpeg,.gif,.webp,.svg,.apng,.json";
-
-/**
- * 将 base64 编码的 Lottie JSON 解码为 JS 对象。
- * atob() 解码 base64 为 ASCII 字符串（Lottie JSON 是纯 ASCII 文本，安全可用）。
- * 失败时返回 null，由调用方回退到 poster.png 或 FallbackIcon。
- */
-function decodeLottieData(b64: string): unknown | null {
-  try {
-    const jsonStr = atob(b64);
-    return JSON.parse(jsonStr);
-  } catch {
-    return null;
-  }
-}
 
 export default function AvatarUploader({
   agentId,
@@ -371,7 +349,7 @@ export default function AvatarUploader({
       React.createElement(Input, {
         value: urlInput,
         onChange: (e: any) => setUrlInput(e.target.value),
-        placeholder: "https://example.com/avatar.png",
+        placeholder: "https://...头像图 URL 或 lottie.host Lottie JSON URL",
         disabled: uploading || !agentId,
       }),
       React.createElement(

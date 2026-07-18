@@ -13,10 +13,6 @@
     "backend": "plugin.py",
     "frontend": "dist/index.js"
   },
-  "dependencies": [
-    "Pillow>=9.0",
-    "httpx"
-  ],
   "min_version": "1.1.0",
   "qwenpaw_version": {
     "min": "1.1.0",

@@ -1,12 +1,25 @@
-var _a, _b, _c, _d, _e, _f;
+var _a;
+const host = ((_a = window.QwenPaw) == null ? void 0 : _a.host) ?? {};
+const ReactStub = {
+  createElement: () => null,
+  useRef: () => ({ current: null }),
+  useState: () => [null, () => {
+  }],
+  useEffect: () => {
+  },
+  useCallback: (fn) => fn,
+  useMemo: (fn) => fn()
+};
+const React = host.React ?? ReactStub;
+const antd = host.antd ?? {};
 function hostFetch(path, init) {
-  var _a2, _b2;
+  var _a2, _b;
   const host2 = (_a2 = window.QwenPaw) == null ? void 0 : _a2.host;
   if (host2 == null ? void 0 : host2.fetch) {
     return host2.fetch(path, init);
   }
   const headers = {};
-  const token = (_b2 = host2 == null ? void 0 : host2.getApiToken) == null ? void 0 : _b2.call(host2);
+  const token = (_b = host2 == null ? void 0 : host2.getApiToken) == null ? void 0 : _b.call(host2);
   if (token) headers.Authorization = `Bearer ${token}`;
   const url = (host2 == null ? void 0 : host2.getApiUrl) ? host2.getApiUrl(path) : `/api${path}`;
   return fetch(url, { ...init, headers: { ...headers, ...init == null ? void 0 : init.headers } });
@@ -128,6 +141,14 @@ function loadLottie() {
   });
   return loadPromise;
 }
+function decodeLottieData(b64) {
+  try {
+    const jsonStr = atob(b64);
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
 async function fetchLottieUrlData(url) {
   try {
     const resp = await fetch(url, { mode: "cors" });
@@ -139,15 +160,6 @@ async function fetchLottieUrlData(url) {
     return null;
   }
 }
-const host$5 = ((_a = window.QwenPaw) == null ? void 0 : _a.host) ?? {};
-const React$5 = host$5.React ?? {
-  createElement: () => null,
-  useRef: () => ({ current: null }),
-  useState: () => [null, () => {
-  }],
-  useEffect: () => {
-  }
-};
 function LottieRenderer({
   animationData,
   size,
@@ -155,12 +167,12 @@ function LottieRenderer({
   fallback,
   className
 }) {
-  const containerRef = React$5.useRef(null);
-  const animRef = React$5.useRef(null);
-  const animDataRef = React$5.useRef(animationData);
+  const containerRef = React.useRef(null);
+  const animRef = React.useRef(null);
+  const animDataRef = React.useRef(animationData);
   animDataRef.current = animationData;
-  const [state, setState] = React$5.useState("loading-lib");
-  React$5.useEffect(() => {
+  const [state, setState] = React.useState("loading-lib");
+  React.useEffect(() => {
     if (!animationData) return;
     let cancelled = false;
     let animInstance = null;
@@ -219,7 +231,7 @@ function LottieRenderer({
   }, [animationData]);
   const borderRadius = shape === "circle" ? "50%" : "8px";
   if (state === "error") {
-    return React$5.createElement(
+    return React.createElement(
       "div",
       {
         className,
@@ -237,7 +249,7 @@ function LottieRenderer({
       fallback ?? null
     );
   }
-  return React$5.createElement("div", {
+  return React.createElement("div", {
     ref: containerRef,
     className,
     style: {
@@ -252,16 +264,6 @@ function LottieRenderer({
 }
 const PLUGIN_ID$1 = "agent-avatar-pro";
 const AGENT_STORAGE_KEY = "qwenpaw-agent-storage";
-function decodeLottieData$2(b64) {
-  try {
-    const jsonStr = atob(b64);
-    return JSON.parse(jsonStr);
-  } catch {
-    return null;
-  }
-}
-const host$4 = ((_b = window.QwenPaw) == null ? void 0 : _b.host) ?? {};
-const React$4 = host$4.React ?? { createElement: () => null, useRef: () => ({ current: null }) };
 let agentNameCache = /* @__PURE__ */ new Map();
 let agentCacheLoaded = false;
 let agentCacheTime = 0;
@@ -287,8 +289,8 @@ async function getAgentName(agentId) {
 }
 function getImageUrl(agentId) {
   const ts = Date.now();
-  if (host$4 == null ? void 0 : host$4.getApiUrl) {
-    return `${host$4.getApiUrl(`/avatar-pro/${agentId}/image`)}?t=${ts}`;
+  if (host == null ? void 0 : host.getApiUrl) {
+    return `${host.getApiUrl(`/avatar-pro/${agentId}/image`)}?t=${ts}`;
   }
   return `/api/avatar-pro/${agentId}/image?t=${ts}`;
 }
@@ -302,7 +304,7 @@ let lastAgentId = null;
 let avatarLoaded = false;
 let _avatarConfirmed = false;
 async function updateChatAvatar(agentId) {
-  var _a2, _b2;
+  var _a2, _b;
   const qwpaw = window.QwenPaw;
   if (!(qwpaw == null ? void 0 : qwpaw.chat)) {
     console.warn("[agent-avatar-pro] chat API not available");
@@ -336,7 +338,7 @@ async function updateChatAvatar(agentId) {
       try {
         const data = await fetchAvatar(agentId);
         if (data.ok && data.format === "json" && data.data) {
-          lottieData = decodeLottieData$2(data.data);
+          lottieData = decodeLottieData(data.data);
           if (!lottieData) {
             avatarUrl = getImageUrl(agentId);
           }
@@ -356,12 +358,12 @@ async function updateChatAvatar(agentId) {
   );
   const params = { nick: agentName };
   if (lottieData) {
-    params.avatar = React$4.createElement(LottieRenderer, {
+    params.avatar = React.createElement(LottieRenderer, {
       animationData: lottieData,
       size: 32,
       // 聊天气泡头像尺寸（通常 32-40px）
       shape: "circle",
-      fallback: React$4.createElement("div", {
+      fallback: React.createElement("div", {
         style: { width: 32, height: 32, borderRadius: "50%", background: "#5c6bc0" }
       })
     });
@@ -379,7 +381,7 @@ async function updateChatAvatar(agentId) {
     console.warn("[agent-avatar-pro] chat.welcome.set failed:", e);
   }
   try {
-    if ((_b2 = qwpaw.chat.response) == null ? void 0 : _b2.set) {
+    if ((_b = qwpaw.chat.response) == null ? void 0 : _b.set) {
       const d = qwpaw.chat.response.set(PLUGIN_ID$1, params);
       disposables.push(d);
     }
@@ -441,7 +443,7 @@ function ChatRouteWrapper() {
     _chatAvatarTriggered = true;
     setTimeout(() => {
       var _a2;
-      const agentId = (_a2 = host$4.getSelectedAgentId) == null ? void 0 : _a2.call(host$4);
+      const agentId = (_a2 = host.getSelectedAgentId) == null ? void 0 : _a2.call(host);
       if (agentId) {
         lastAgentId = null;
         console.log(`[agent-avatar-pro] Chat page entered, loading avatar for "${agentId}"`);
@@ -449,10 +451,10 @@ function ChatRouteWrapper() {
       }
     }, 0);
   }
-  return React$4.createElement(_chatInnerRef.current);
+  return React.createElement(_chatInnerRef.current);
 }
 function startAvatarMonitor() {
-  var _a2, _b2;
+  var _a2, _b;
   patchSessionStorage();
   window.addEventListener("storage", onStorageEvent);
   const qwpaw = window.QwenPaw;
@@ -468,12 +470,12 @@ function startAvatarMonitor() {
     }
   } else {
     console.warn("[agent-avatar-pro] route.wrap not available, falling back to 5s delay");
-    const currentId = (_b2 = host$4.getSelectedAgentId) == null ? void 0 : _b2.call(host$4);
+    const currentId = (_b = host.getSelectedAgentId) == null ? void 0 : _b.call(host);
     if (currentId) {
       lastAgentId = currentId;
       setTimeout(() => {
         var _a3;
-        const freshId = (_a3 = host$4.getSelectedAgentId) == null ? void 0 : _a3.call(host$4);
+        const freshId = (_a3 = host.getSelectedAgentId) == null ? void 0 : _a3.call(host);
         if (freshId) {
           lastAgentId = null;
           updateChatAvatar(freshId);
@@ -486,7 +488,7 @@ function startAvatarMonitor() {
     setTimeout(() => {
       var _a3;
       if (!avatarLoaded && !_avatarConfirmed) {
-        const retryId = (_a3 = host$4.getSelectedAgentId) == null ? void 0 : _a3.call(host$4);
+        const retryId = (_a3 = host.getSelectedAgentId) == null ? void 0 : _a3.call(host);
         if (retryId) {
           console.log(`[agent-avatar-pro] Retrying avatar load (${delay / 1e3}s, avatarLoaded=false, agent: "${retryId}")`);
           lastAgentId = null;
@@ -499,7 +501,7 @@ function startAvatarMonitor() {
 }
 function refreshCurrentAvatar(agentId) {
   var _a2;
-  const targetId = agentId ?? ((_a2 = host$4.getSelectedAgentId) == null ? void 0 : _a2.call(host$4));
+  const targetId = agentId ?? ((_a2 = host.getSelectedAgentId) == null ? void 0 : _a2.call(host));
   if (!targetId) return;
   console.log(`[agent-avatar-pro] Force refresh for agent "${targetId}"`);
   lastAgentId = null;
@@ -515,22 +517,10 @@ function stopAvatarMonitor() {
   }
   console.log("[agent-avatar-pro] Avatar monitor stopped");
 }
-const host$3 = ((_c = window.QwenPaw) == null ? void 0 : _c.host) ?? {};
-const React$3 = host$3.React ?? { createElement: () => null, useState: () => [null, () => {
-}], useEffect: () => {
-} };
 const DEFAULT_SIZE = 48;
 const DEFAULT_SHAPE = "circle";
-function decodeLottieData$1(b64) {
-  try {
-    const jsonStr = atob(b64);
-    return JSON.parse(jsonStr);
-  } catch {
-    return null;
-  }
-}
 function FallbackIcon({ size }) {
-  return React$3.createElement("div", {
+  return React.createElement("div", {
     style: {
       width: size,
       height: size,
@@ -540,7 +530,7 @@ function FallbackIcon({ size }) {
       alignItems: "center",
       justifyContent: "center"
     }
-  }, React$3.createElement(
+  }, React.createElement(
     "svg",
     {
       width: size * 0.55,
@@ -552,9 +542,9 @@ function FallbackIcon({ size }) {
       strokeLinecap: "round",
       strokeLinejoin: "round"
     },
-    React$3.createElement("rect", { x: 3, y: 11, width: 18, height: 10, rx: 2 }),
-    React$3.createElement("circle", { cx: 12, cy: 5, r: 2 }),
-    React$3.createElement("path", { d: "M12 7v4" })
+    React.createElement("rect", { x: 3, y: 11, width: 18, height: 10, rx: 2 }),
+    React.createElement("circle", { cx: 12, cy: 5, r: 2 }),
+    React.createElement("path", { d: "M12 7v4" })
   ));
 }
 function AvatarRenderer({
@@ -565,18 +555,18 @@ function AvatarRenderer({
   fallback,
   className
 }) {
-  const [imgSrc, setImgSrc] = React$3.useState(null);
-  const [format, setFormat] = React$3.useState("");
-  const [lottieData, setLottieData] = React$3.useState(null);
-  const [loading, setLoading] = React$3.useState(true);
-  React$3.useEffect(() => {
+  const [imgSrc, setImgSrc] = React.useState(null);
+  const [format, setFormat] = React.useState("");
+  const [lottieData, setLottieData] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
     let cancelled = false;
     fetchAvatar(agentId).then((data) => {
       if (cancelled) return;
       if (data.ok) {
         setFormat(data.format);
         if (data.format === "json" && data.type === "file" && data.data) {
-          const parsed = decodeLottieData$1(data.data);
+          const parsed = decodeLottieData(data.data);
           if (parsed) {
             setLottieData(parsed);
             setImgSrc(null);
@@ -619,25 +609,25 @@ function AvatarRenderer({
   }, [agentId]);
   const borderRadius = shape === "circle" ? "50%" : "8px";
   if (loading) {
-    return React$3.createElement(FallbackIcon, { size });
+    return React.createElement(FallbackIcon, { size });
   }
   if (format === "json" && lottieData) {
-    return React$3.createElement(LottieRenderer, {
+    return React.createElement(LottieRenderer, {
       animationData: lottieData,
       size,
       shape,
       className,
-      fallback: fallback ?? React$3.createElement(FallbackIcon, { size })
+      fallback: fallback ?? React.createElement(FallbackIcon, { size })
     });
   }
   if (!imgSrc) {
-    return React$3.createElement(
+    return React.createElement(
       "div",
       { className },
-      fallback ?? React$3.createElement(FallbackIcon, { size })
+      fallback ?? React.createElement(FallbackIcon, { size })
     );
   }
-  return React$3.createElement("img", {
+  return React.createElement("img", {
     className,
     src: imgSrc,
     alt: `${agentId} avatar`,
@@ -651,18 +641,7 @@ function AvatarRenderer({
     onError: () => setImgSrc(null)
   });
 }
-const host$2 = ((_d = window.QwenPaw) == null ? void 0 : _d.host) ?? {};
-const React$2 = host$2.React ?? {
-  createElement: () => null,
-  useState: () => [null, () => {
-  }],
-  useRef: () => ({ current: null }),
-  useCallback: (fn) => fn,
-  useEffect: () => {
-  }
-};
-const antd$2 = host$2.antd ?? {};
-const { Modal: Modal$1, Slider, Space: Space$2, Button: Button$2, Typography: Typography$1 } = antd$2;
+const { Modal: Modal$1, Slider, Space: Space$2, Button: Button$2, Typography: Typography$1 } = antd;
 const { Text: Text$1 } = Typography$1 ?? {};
 const CONTAINER_W = 460;
 const CONTAINER_H = 360;
@@ -723,18 +702,18 @@ function CropModal({
   onCancel,
   fileName = "avatar.png"
 }) {
-  const [zoom, setZoom] = React$2.useState(1);
-  const [rotation, setRotation] = React$2.useState(0);
-  const [offset, setOffset] = React$2.useState({ x: 0, y: 0 });
-  const [processing, setProcessing] = React$2.useState(false);
-  const [imgSize, setImgSize] = React$2.useState({ w: 0, h: 0 });
-  const [baseScale, setBaseScale] = React$2.useState(1);
-  const [isDragging, setIsDragging] = React$2.useState(false);
-  const isDraggingRef = React$2.useRef(false);
-  const dragStartRef = React$2.useRef({ x: 0, y: 0 });
-  const offsetStartRef = React$2.useRef({ x: 0, y: 0 });
-  const clampedRef = React$2.useRef({ x: 0, y: 0 });
-  React$2.useEffect(() => {
+  const [zoom, setZoom] = React.useState(1);
+  const [rotation, setRotation] = React.useState(0);
+  const [offset, setOffset] = React.useState({ x: 0, y: 0 });
+  const [processing, setProcessing] = React.useState(false);
+  const [imgSize, setImgSize] = React.useState({ w: 0, h: 0 });
+  const [baseScale, setBaseScale] = React.useState(1);
+  const [isDragging, setIsDragging] = React.useState(false);
+  const isDraggingRef = React.useRef(false);
+  const dragStartRef = React.useRef({ x: 0, y: 0 });
+  const offsetStartRef = React.useRef({ x: 0, y: 0 });
+  const clampedRef = React.useRef({ x: 0, y: 0 });
+  React.useEffect(() => {
     if (!visible || !imageSrc) return;
     const img = new Image();
     img.onload = () => {
@@ -758,7 +737,7 @@ function CropModal({
   const clampedX = clampOffset(offset.x, displayW, CROP_SIZE);
   const clampedY = clampOffset(offset.y, displayH, CROP_SIZE);
   clampedRef.current = { x: clampedX, y: clampedY };
-  const handleMouseDown = React$2.useCallback(
+  const handleMouseDown = React.useCallback(
     (e) => {
       e.preventDefault();
       isDraggingRef.current = true;
@@ -771,7 +750,7 @@ function CropModal({
     },
     []
   );
-  const handleMouseMove = React$2.useCallback((e) => {
+  const handleMouseMove = React.useCallback((e) => {
     if (!isDraggingRef.current) return;
     const dx = e.clientX - dragStartRef.current.x;
     const dy = e.clientY - dragStartRef.current.y;
@@ -780,16 +759,16 @@ function CropModal({
       y: offsetStartRef.current.y + dy
     });
   }, []);
-  const stopDrag = React$2.useCallback(() => {
+  const stopDrag = React.useCallback(() => {
     isDraggingRef.current = false;
     setIsDragging(false);
   }, []);
-  React$2.useEffect(() => {
+  React.useEffect(() => {
     if (!isDragging) return;
     window.addEventListener("mouseup", stopDrag);
     return () => window.removeEventListener("mouseup", stopDrag);
   }, [isDragging, stopDrag]);
-  const handleConfirm = React$2.useCallback(async () => {
+  const handleConfirm = React.useCallback(async () => {
     if (!imgSize.w || !imgSize.h) return;
     setProcessing(true);
     try {
@@ -820,7 +799,7 @@ function CropModal({
     fileName,
     onConfirm
   ]);
-  const handleCancel = React$2.useCallback(() => {
+  const handleCancel = React.useCallback(() => {
     setZoom(1);
     setRotation(0);
     setOffset({ x: 0, y: 0 });
@@ -829,7 +808,7 @@ function CropModal({
     stopDrag();
     onCancel();
   }, [onCancel, stopDrag]);
-  const handleRotateChange = React$2.useCallback((value) => {
+  const handleRotateChange = React.useCallback((value) => {
     setRotation(value);
     setOffset({ x: 0, y: 0 });
   }, []);
@@ -837,7 +816,7 @@ function CropModal({
   const cursorStyle = isDragging ? "grabbing" : canDrag ? "grab" : "default";
   const cropLeft = (CONTAINER_W - CROP_SIZE) / 2;
   const cropTop = (CONTAINER_H - CROP_SIZE) / 2;
-  return React$2.createElement(
+  return React.createElement(
     Modal$1,
     {
       title: "裁剪头像",
@@ -845,11 +824,11 @@ function CropModal({
       onCancel: handleCancel,
       width: CONTAINER_W + 48,
       destroyOnClose: true,
-      footer: React$2.createElement(
+      footer: React.createElement(
         Space$2,
         null,
-        React$2.createElement(Button$2, { onClick: handleCancel }, "取消"),
-        React$2.createElement(
+        React.createElement(Button$2, { onClick: handleCancel }, "取消"),
+        React.createElement(
           Button$2,
           {
             type: "primary",
@@ -862,7 +841,7 @@ function CropModal({
       )
     },
     // ── 裁剪画布 ────────────────────────────────────────────
-    React$2.createElement(
+    React.createElement(
       "div",
       {
         style: {
@@ -882,7 +861,7 @@ function CropModal({
         onMouseLeave: stopDrag
       },
       // 图片层（先居中，再 CSS 旋转，再屏幕空间平移）
-      imgSize.w > 0 && React$2.createElement(
+      imgSize.w > 0 && React.createElement(
         "div",
         {
           style: {
@@ -900,7 +879,7 @@ function CropModal({
             pointerEvents: "none"
           }
         },
-        React$2.createElement("img", {
+        React.createElement("img", {
           src: imageSrc,
           alt: "crop",
           draggable: false,
@@ -912,7 +891,7 @@ function CropModal({
         })
       ),
       // 圆形遮罩层（半透明覆盖 + 圆形透明窗口）
-      React$2.createElement("div", {
+      React.createElement("div", {
         style: {
           position: "absolute",
           inset: 0,
@@ -921,7 +900,7 @@ function CropModal({
         }
       }),
       // 圆形边框指示器
-      React$2.createElement("div", {
+      React.createElement("div", {
         style: {
           position: "absolute",
           left: cropLeft,
@@ -936,7 +915,7 @@ function CropModal({
       })
     ),
     // ── 旋转滑块（360° 自由旋转）────────────────────────────────
-    React$2.createElement(
+    React.createElement(
       "div",
       {
         style: {
@@ -950,12 +929,12 @@ function CropModal({
           marginRight: "auto"
         }
       },
-      React$2.createElement(
+      React.createElement(
         Text$1,
         { type: "secondary", style: { fontSize: 13, flexShrink: 0 } },
         "旋转:"
       ),
-      React$2.createElement(
+      React.createElement(
         Slider,
         {
           min: 0,
@@ -968,17 +947,17 @@ function CropModal({
           tooltip: { formatter: (v) => `${v}°` }
         }
       ),
-      React$2.createElement(
+      React.createElement(
         Text$1,
         { type: "secondary", style: { fontSize: 12, flexShrink: 0, width: 36, textAlign: "right" } },
         `${rotation}°`
       )
     ),
     // ── 缩放控制 ────────────────────────────────────────────
-    React$2.createElement(
+    React.createElement(
       "div",
       { style: { marginTop: 8, padding: "0 12px" } },
-      React$2.createElement(
+      React.createElement(
         "div",
         {
           style: {
@@ -987,18 +966,18 @@ function CropModal({
             marginBottom: 4
           }
         },
-        React$2.createElement(
+        React.createElement(
           Text$1,
           { type: "secondary", style: { fontSize: 13 } },
           "缩放"
         ),
-        React$2.createElement(
+        React.createElement(
           Text$1,
           { type: "secondary", style: { fontSize: 13 } },
           `${Math.round(zoom * 100)}%`
         )
       ),
-      React$2.createElement(Slider, {
+      React.createElement(Slider, {
         min: MIN_ZOOM,
         max: MAX_ZOOM,
         step: 0.01,
@@ -1008,7 +987,7 @@ function CropModal({
       })
     ),
     // ── 提示 ────────────────────────────────────────────────
-    React$2.createElement(
+    React.createElement(
       Text$1,
       {
         type: "secondary",
@@ -1047,26 +1026,8 @@ async function shouldSkipCrop(file) {
   }
   return false;
 }
-const host$1 = ((_e = window.QwenPaw) == null ? void 0 : _e.host) ?? {};
-const React$1 = host$1.React ?? {
-  createElement: () => null,
-  useState: () => [null, () => {
-  }],
-  useEffect: () => {
-  },
-  useCallback: (fn) => fn
-};
-const antd$1 = host$1.antd ?? {};
-const { Upload, Input: Input$1, Button: Button$1, Space: Space$1, message: message$1, Modal } = antd$1;
+const { Upload, Input: Input$1, Button: Button$1, Space: Space$1, message: message$1, Modal } = antd;
 const ACCEPT_DEFAULT = ".png,.jpg,.jpeg,.gif,.webp,.svg,.apng,.json";
-function decodeLottieData(b64) {
-  try {
-    const jsonStr = atob(b64);
-    return JSON.parse(jsonStr);
-  } catch {
-    return null;
-  }
-}
 function AvatarUploader({
   agentId,
   maxSizeMB = 5,
@@ -1074,14 +1035,14 @@ function AvatarUploader({
   onUploaded,
   onError
 }) {
-  const [preview, setPreview] = React$1.useState(null);
-  const [uploading, setUploading] = React$1.useState(false);
-  const [urlInput, setUrlInput] = React$1.useState("");
-  const [cropVisible, setCropVisible] = React$1.useState(false);
-  const [cropImageSrc, setCropImageSrc] = React$1.useState("");
-  const [cropFileName, setCropFileName] = React$1.useState("avatar.png");
-  const [currentAvatar, setCurrentAvatar] = React$1.useState(null);
-  React$1.useEffect(() => {
+  const [preview, setPreview] = React.useState(null);
+  const [uploading, setUploading] = React.useState(false);
+  const [urlInput, setUrlInput] = React.useState("");
+  const [cropVisible, setCropVisible] = React.useState(false);
+  const [cropImageSrc, setCropImageSrc] = React.useState("");
+  const [cropFileName, setCropFileName] = React.useState("avatar.png");
+  const [currentAvatar, setCurrentAvatar] = React.useState(null);
+  React.useEffect(() => {
     if (!agentId) {
       setCurrentAvatar(null);
       return;
@@ -1139,7 +1100,7 @@ function AvatarUploader({
       cancelled = true;
     };
   }, [agentId]);
-  const confirmOverwrite = React$1.useCallback(() => {
+  const confirmOverwrite = React.useCallback(() => {
     if (!(currentAvatar == null ? void 0 : currentAvatar.hasAvatar)) return Promise.resolve(true);
     return new Promise((resolve) => {
       Modal.confirm({
@@ -1152,7 +1113,7 @@ function AvatarUploader({
       });
     });
   }, [currentAvatar]);
-  const doUpload = React$1.useCallback(
+  const doUpload = React.useCallback(
     async (file) => {
       const confirmed = await confirmOverwrite();
       if (!confirmed) return;
@@ -1194,7 +1155,7 @@ function AvatarUploader({
     },
     [agentId, onUploaded, onError, confirmOverwrite]
   );
-  const handleFile = React$1.useCallback(
+  const handleFile = React.useCallback(
     async (file) => {
       const maxBytes = maxSizeMB * 1024 * 1024;
       if (file.size > maxBytes) {
@@ -1220,17 +1181,17 @@ function AvatarUploader({
     },
     [maxSizeMB, onError, doUpload]
   );
-  const handleCropConfirm = React$1.useCallback(
+  const handleCropConfirm = React.useCallback(
     async (croppedFile) => {
       setCropVisible(false);
       await doUpload(croppedFile);
     },
     [doUpload]
   );
-  const handleCropCancel = React$1.useCallback(() => {
+  const handleCropCancel = React.useCallback(() => {
     setCropVisible(false);
   }, []);
-  const handleUrlSubmit = React$1.useCallback(async () => {
+  const handleUrlSubmit = React.useCallback(async () => {
     if (!urlInput.trim()) return;
     const confirmed = await confirmOverwrite();
     if (!confirmed) return;
@@ -1254,11 +1215,11 @@ function AvatarUploader({
       setUploading(false);
     }
   }, [agentId, urlInput, onUploaded, onError, confirmOverwrite]);
-  return React$1.createElement(
+  return React.createElement(
     Space$1,
     { direction: "vertical", size: "middle", style: { width: "100%" } },
     // 当前头像预览（已有头像时显示）
-    (currentAvatar == null ? void 0 : currentAvatar.hasAvatar) && React$1.createElement(
+    (currentAvatar == null ? void 0 : currentAvatar.hasAvatar) && React.createElement(
       "div",
       {
         style: {
@@ -1271,18 +1232,18 @@ function AvatarUploader({
           border: "1px solid #e8e8e8"
         }
       },
-      React$1.createElement("span", {
+      React.createElement("span", {
         style: { fontSize: 12, color: "#888", whiteSpace: "nowrap" }
       }, "当前头像:"),
       // Lottie 预览分支
-      currentAvatar.format === "json" && currentAvatar.lottieData ? React$1.createElement(LottieRenderer, {
+      currentAvatar.format === "json" && currentAvatar.lottieData ? React.createElement(LottieRenderer, {
         animationData: currentAvatar.lottieData,
         size: 40,
         shape: "circle",
-        fallback: React$1.createElement("div", {
+        fallback: React.createElement("div", {
           style: { width: 40, height: 40, borderRadius: "50%", background: "#e8eaf6" }
         })
-      }) : React$1.createElement("img", {
+      }) : React.createElement("img", {
         key: currentAvatar.imgSrc || "none",
         src: currentAvatar.imgSrc || "",
         alt: "当前头像",
@@ -1297,12 +1258,12 @@ function AvatarUploader({
           e.target.style.display = "none";
         }
       }),
-      React$1.createElement("span", {
+      React.createElement("span", {
         style: { fontSize: 12, color: "#666" }
       }, `${currentAvatar.format || "unknown"} · ${currentAvatar.source === "url" ? "URL" : "文件上传"}`)
     ),
     // 拖拽上传区域
-    React$1.createElement(
+    React.createElement(
       Upload.Dragger,
       {
         accept: acceptedFormats,
@@ -1310,7 +1271,7 @@ function AvatarUploader({
         beforeUpload: handleFile,
         disabled: uploading || !agentId
       },
-      preview ? React$1.createElement("img", {
+      preview ? React.createElement("img", {
         src: preview,
         alt: "预览",
         style: {
@@ -1322,34 +1283,34 @@ function AvatarUploader({
           display: "block",
           border: "3px solid #e8eaf6"
         }
-      }) : React$1.createElement(
+      }) : React.createElement(
         "p",
         { style: { fontSize: 40, color: "#5c6bc0", marginBottom: 8 } },
         "+"
       ),
-      React$1.createElement("p", null, "拖拽文件到此处，或点击选择"),
-      React$1.createElement(
+      React.createElement("p", null, "拖拽文件到此处，或点击选择"),
+      React.createElement(
         "p",
         { style: { color: "#999", fontSize: 12 } },
         "支持 PNG / APNG / JPEG / GIF / WebP / SVG / Lottie · 最大 " + maxSizeMB + "MB"
       ),
-      React$1.createElement(
+      React.createElement(
         "p",
         { style: { color: "#bbb", fontSize: 11, marginTop: 4 } },
         "PNG / JPEG / 静态 WebP 可裁剪，APNG / GIF / SVG / Lottie / 动态 WebP 直接上传"
       )
     ),
     // URL 输入
-    React$1.createElement(
+    React.createElement(
       Space$1.Compact,
       { style: { width: "100%" } },
-      React$1.createElement(Input$1, {
+      React.createElement(Input$1, {
         value: urlInput,
         onChange: (e) => setUrlInput(e.target.value),
-        placeholder: "https://example.com/avatar.png",
+        placeholder: "https://...头像图 URL 或 lottie.host Lottie JSON URL",
         disabled: uploading || !agentId
       }),
-      React$1.createElement(
+      React.createElement(
         Button$1,
         {
           type: "primary",
@@ -1361,7 +1322,7 @@ function AvatarUploader({
       )
     ),
     // 裁剪弹窗
-    React$1.createElement(CropModal, {
+    React.createElement(CropModal, {
       imageSrc: cropImageSrc,
       visible: cropVisible,
       onConfirm: handleCropConfirm,
@@ -1370,11 +1331,6 @@ function AvatarUploader({
     })
   );
 }
-const host = ((_f = window.QwenPaw) == null ? void 0 : _f.host) ?? {};
-const React = host.React ?? { createElement: () => null, useState: () => [null, () => {
-}], useEffect: () => {
-}, useCallback: (fn) => fn, useMemo: (fn) => fn(), useRef: () => ({ current: null }) };
-const antd = host.antd ?? {};
 const {
   Card,
   Table,
@@ -1629,7 +1585,7 @@ function AvatarManager(_props) {
         loading,
         dataSource: avatars,
         columns,
-        pagination: false,
+        pagination: { pageSize: 10, showSizeChanger: true, size: "small" },
         locale: {
           emptyText: React.createElement(Empty, {
             description: "暂无自定义头像，输入 Agent ID 并上传头像以开始"
@@ -1647,7 +1603,7 @@ class AgentAvatarProPlugin {
     this.disposables = [];
   }
   setup() {
-    var _a2, _b2;
+    var _a2, _b;
     const qwpaw = window.QwenPaw;
     if (!qwpaw) {
       console.warn("[agent-avatar-pro] window.QwenPaw not available, deferring setup");
@@ -1668,7 +1624,7 @@ class AgentAvatarProPlugin {
       console.error("[agent-avatar-pro] Failed to register route:", e);
     }
     try {
-      if ((_b2 = qwpaw.menu) == null ? void 0 : _b2.add) {
+      if ((_b = qwpaw.menu) == null ? void 0 : _b.add) {
         const d = qwpaw.menu.add(this.id, {
           id: ROUTE_ID,
           label: "Agent 头像管理",

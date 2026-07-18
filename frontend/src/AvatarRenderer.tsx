@@ -5,31 +5,15 @@
  */
 
 import type * as ReactNS from "react";
-
-const host = window.QwenPaw?.host ?? {} as any;
-const React: typeof ReactNS = host.React ?? { createElement: () => null, useState: (() => [null, () => {}]) as any, useEffect: () => {} };
+import { host, React } from "./qwenpaw-host";
 
 import type { AvatarRendererProps, AvatarDataResponse } from './types';
 import { fetchAvatar, getAvatarImageUrl } from './api';
-import { fetchLottieUrlData } from './LottieLoader';
+import { fetchLottieUrlData, decodeLottieData } from './LottieLoader';
 import LottieRenderer from './LottieRenderer';
 
 const DEFAULT_SIZE = 48;
 const DEFAULT_SHAPE = 'circle';
-
-/**
- * 将 base64 编码的 Lottie JSON 解码为 JS 对象。
- * atob() 解码 base64 为 ASCII 字符串（Lottie JSON 是纯 ASCII 文本，安全可用）。
- * 失败时返回 null，由调用方回退到 FallbackIcon 或 poster.png。
- */
-function decodeLottieData(b64: string): unknown | null {
-  try {
-    const jsonStr = atob(b64);
-    return JSON.parse(jsonStr);
-  } catch {
-    return null;
-  }
-}
 
 function FallbackIcon({ size }: { size: number }) {
   return React.createElement("div", {

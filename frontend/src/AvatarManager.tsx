@@ -6,10 +6,7 @@
  */
 
 import type * as ReactNS from "react";
-
-const host = window.QwenPaw?.host ?? {} as any;
-const React: typeof ReactNS = host.React ?? { createElement: () => null, useState: (() => [null, () => {}]) as any, useEffect: () => {}, useCallback: ((fn: any) => fn) as any, useMemo: ((fn: any) => fn()) as any, useRef: (() => ({ current: null })) as any };
-const antd = host.antd ?? {};
+import { host, React, antd } from "./qwenpaw-host";
 
 const {
   Card, Table, Input, Button, Space, Tag, Typography, message, Popconfirm, Row, Col, Empty, AutoComplete,
@@ -261,7 +258,7 @@ export default function AvatarManager(_props?: AvatarManagerProps) {
         loading,
         dataSource: avatars,
         columns,
-        pagination: false,
+        pagination: { pageSize: 10, showSizeChanger: true, size: "small" },
         locale: {
           emptyText: React.createElement(Empty, {
             description: '暂无自定义头像，输入 Agent ID 并上传头像以开始',

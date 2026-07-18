@@ -93,11 +93,14 @@ async def get_avatar(agent_id: str, size: str = "full"):
 
 
 @router.get("/{agent_id}/image")
-async def get_avatar_image(agent_id: str, size: str = "full"):
+async def get_avatar_image(agent_id: str, size: str = "full", request: Request):
     """
     获取 Agent 头像原始图片字节（供 <img src> 直接加载）。
     返回正确的 Content-Type（如 image/png），而非 JSON。
     对于 URL 类型头像，返回 302 重定向到原始 URL。
+
+    缓存策略：Cache-Control: max-age=300 + ETag（内容 SHA1），
+    客户端发 If-None-Match 匹配时返回 304 Not Modified，避免重传字节。
     """
     svc = await get_service()
     if svc is None:
@@ -115,10 +118,22 @@ async def get_avatar_image(agent_id: str, size: str = "full"):
         return JSONResponse(status_code=404, content={"ok": False, "error": "No avatar"})
 
     image_data, mime_type = result
+    # ETag: 内容 SHA1 前 16 字符（短哈希足够碰撞罕见，节省头部体积）
+    import hashlib
+    etag = hashlib.sha1(image_data).hexdigest()[:16]
+    # If-None-Match 命中：返回 304 Not Modified，空响应体
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={
+            "ETag": etag,
+            "Cache-Control": "public, max-age=300",
+        })
     return Response(
         content=image_data,
         media_type=mime_type,
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={
+            "Cache-Control": "public, max-age=300",
+            "ETag": etag,
+        },
     )
 
 
@@ -197,6 +212,29 @@ class AgentAvatarProPlugin:
 
     async def _on_startup(self) -> None:
         """初始化头像服务，创建数据目录。"""
+        # 软检测可选依赖：Pillow 用于格式检测/缩放/poster，httpx 用于 URL Lottie 下载
+        # 缺失时插件仍可工作（降级路径已在 avatar_service.py 中处理），仅日志提示
+        try:
+            import PIL  # noqa: F401
+            pillow_ok = True
+        except ImportError:
+            pillow_ok = False
+        try:
+            import httpx  # noqa: F401
+            httpx_ok = True
+        except ImportError:
+            httpx_ok = False
+        if not pillow_ok or not httpx_ok:
+            missing = []
+            if not pillow_ok:
+                missing.append("Pillow (格式检测/缩放/Lottie poster 降级)")
+            if not httpx_ok:
+                missing.append("httpx (URL Lottie poster 下载)")
+            print(
+                f"[agent-avatar-pro] 可选依赖缺失: {', '.join(missing)} — "
+                "部分功能降级，请 `pip install Pillow httpx` 以启用完整能力"
+            )
+
         svc = AvatarService()
         await svc.initialize(plugin_dir=_plugin_dir)
         set_service(svc)  # 设置全局单例，供 avatar_backend.py 的工具函数直接使用
